@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
 import { AudioPlayer } from '../common/AudioPlayer';
 import { Headphones, CheckCircle2, AlertCircle, Sparkles, HelpCircle, Lock } from 'lucide-react';
+import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
 
 interface ListeningModuleProps {
   activity: ActivityContent;
@@ -12,19 +13,49 @@ export const ListeningModule: React.FC<ListeningModuleProps> = ({
   activity,
   updateHarnessStatus,
 }) => {
-  const [userInputs, setUserInputs] = useState<string[]>(
-    new Array(activity.dictationTarget?.length || 0).fill('')
-  );
+  const targets = activity.dictationTarget || [];
+  const savedState = loadStudentProgress().moduleDrafts[activity.id];
+
+  const [userInputs, setUserInputs] = useState<string[]>(() => {
+    if (savedState?.answers) {
+      return targets.map((_, i) => savedState.answers?.[`input_${i}`] || '');
+    }
+    return new Array(targets.length).fill('');
+  });
   const [checked, setChecked] = useState(false);
   const [passed, setPassed] = useState(false);
   const [revealedHint, setRevealedHint] = useState(false);
 
-  const targets = activity.dictationTarget || [];
+  useEffect(() => {
+    const s = loadStudentProgress().moduleDrafts[activity.id];
+    if (s?.answers) {
+      setUserInputs(targets.map((_, i) => s.answers?.[`input_${i}`] || ''));
+    } else {
+      setUserInputs(new Array(targets.length).fill(''));
+    }
+    setChecked(false);
+    setPassed(false);
+  }, [activity.id]);
 
   const handleInputChange = (index: number, val: string) => {
     const updated = [...userInputs];
     updated[index] = val;
     setUserInputs(updated);
+
+    const progress = loadStudentProgress();
+    const currentModule = progress.moduleDrafts[activity.id] || {};
+    const updatedAnswers = { ...(currentModule.answers || {}) };
+    updatedAnswers[`input_${index}`] = val;
+
+    saveStudentProgress({
+      moduleDrafts: {
+        ...progress.moduleDrafts,
+        [activity.id]: {
+          ...currentModule,
+          answers: updatedAnswers,
+        }
+      }
+    });
   };
 
   const handleCheck = () => {
@@ -45,17 +76,17 @@ export const ListeningModule: React.FC<ListeningModuleProps> = ({
     updateHarnessStatus(prev => ({
       ...prev,
       sensor: {
-        name: '청취 딕테이션 WER 일치율 센서',
+        name: '듣기 받아쓰기 정확도 점검',
         currentScore: score,
         status: isPass ? 'passed' : 'warning',
         feedback: isPass 
-          ? `우수! ${targets.length}개 중 ${correctCount}개 핵심 청킹 일치 (${score}점)` 
-          : `주의: ${targets.length}개 중 ${correctCount}개 일치. 다시 듣고 스펠링과 연음을 확인하세요.`
+          ? `우수! ${targets.length}개 중 ${correctCount}개 핵심 어구 일치 (${score}점)` 
+          : `주의: ${targets.length}개 중 ${correctCount}개 일치. 다시 듣고 철자와 소리를 확인하세요.`
       },
       loop: {
         ...prev.loop,
         attempts: prev.loop.attempts + 1,
-        currentStep: isPass ? '듣기 완료' : `재시도 ${prev.loop.attempts + 1}회차`,
+        currentStep: isPass ? '듣기 완료' : `재도전 ${prev.loop.attempts + 1}회차`,
       },
       observability: {
         ...prev.observability,
@@ -76,7 +107,7 @@ export const ListeningModule: React.FC<ListeningModuleProps> = ({
             <h3 className="text-lg font-bold text-slateText-title flex items-center gap-2">
               {activity.title}
               <span className="text-xs font-normal px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                듣기 & 청킹 딕테이션
+                듣기 & 받아쓰기
               </span>
             </h3>
             <p className="text-xs text-slateText-muted">{activity.subTitle}</p>
@@ -97,10 +128,10 @@ export const ListeningModule: React.FC<ListeningModuleProps> = ({
         <div className="flex items-center justify-between mb-3">
           <h4 className="font-bold text-sm text-slateText-title flex items-center gap-1.5">
             <Sparkles className="w-4 h-4 text-honey-500" />
-            핵심 의미 청킹(Chunking) 빈칸 채우기
+            핵심 의미 단위 빈칸 채우기
           </h4>
           <span className="text-xs text-stone-500">
-            총 {targets.length}개 빈칸
+            총 {targets.length}개 빈칸 (자동 저장 중)
           </span>
         </div>
         <p className="text-xs text-slateText-muted mb-4">
@@ -140,27 +171,27 @@ export const ListeningModule: React.FC<ListeningModuleProps> = ({
           })}
         </div>
 
-        {/* 채점 및 비계 힌트 버튼 */}
+        {/* 채점 및 힌트 버튼 */}
         <div className="mt-4 flex items-center justify-between">
           <button
             onClick={() => setRevealedHint(!revealedHint)}
-            className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-700"
+            className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-700 cursor-pointer"
           >
             <HelpCircle className="w-3.5 h-3.5" />
-            {revealedHint ? '힌트 숨기기' : '하네스 스캐폴딩 힌트 보기'}
+            {revealedHint ? '힌트 숨기기' : '첫 글자 힌트 보기'}
           </button>
           <button
             onClick={handleCheck}
-            className="px-4 py-2 bg-honey-400 hover:bg-honey-500 text-slateText-title font-bold text-xs rounded-xl shadow-xs transition-colors"
+            className="px-4 py-2 bg-honey-400 hover:bg-honey-500 text-slateText-title font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
           >
-            하네스 센서 일치도 채점하기
+            채점 및 정답 확인하기
           </button>
         </div>
 
         {/* 힌트 영역 */}
         {revealedHint && (
           <div className="mt-3 p-3 bg-honey-50/60 border border-honey-200 rounded-lg text-xs text-stone-700 space-y-1">
-            <p className="font-bold text-honey-800">💡 하네스 첫 글자 힌트:</p>
+            <p className="font-bold text-honey-800">💡 단어 첫 글자 힌트:</p>
             <div className="flex flex-wrap gap-2 pt-1">
               {targets.map((t, i) => (
                 <span key={i} className="px-2 py-0.5 bg-white rounded border border-honey-200 font-mono text-[11px]">
@@ -172,22 +203,22 @@ export const ListeningModule: React.FC<ListeningModuleProps> = ({
         )}
       </div>
 
-      {/* 하네스 권한 잠금 안내 */}
+      {/* 대본 열람 안내 */}
       <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 flex items-center justify-between text-xs text-stone-500">
         <div className="flex items-center gap-2">
           <Lock className="w-4 h-4 text-stone-400" />
-          <span>전체 스크립트 전문은 딕테이션 75% 이상 통과 시 해금됩니다.</span>
+          <span>전체 대본 전문은 빈칸 채우기 75점 이상 달성 시 열람할 수 있습니다.</span>
         </div>
         {passed && (
           <span className="text-emerald-600 font-bold flex items-center gap-1">
-            <CheckCircle2 className="w-4 h-4" /> 권한 잠금 해제됨
+            <CheckCircle2 className="w-4 h-4" /> 전체 대본 열람 가능
           </span>
         )}
       </div>
 
       {passed && (
         <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 leading-relaxed">
-          <strong className="block font-bold mb-1">[해금된 전체 스크립트]</strong>
+          <strong className="block font-bold mb-1">[전체 음원 스크립트]</strong>
           {activity.audioScript}
         </div>
       )}

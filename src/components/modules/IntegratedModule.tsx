@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
 import { AudioPlayer } from '../common/AudioPlayer';
-import { Layers, ArrowRight, CheckCircle2, Sparkles, Database, FileEdit, Mic, Volume2 } from 'lucide-react';
+import { Layers, ArrowRight, CheckCircle2, Database, FileEdit } from 'lucide-react';
+import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
+import { runFullSmartSensorInspection, SmartSensorReportData } from '../../utils/sensorEngine';
+import { IntelligentSensorReport } from '../common/IntelligentSensorReport';
 
 interface IntegratedModuleProps {
   activity: ActivityContent;
@@ -14,27 +17,89 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
   updateHarnessStatus,
   onStudentOutputChange,
 }) => {
-  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
-  
-  // Step 1 상태 (메모, 증거 카드, 주장 정리)
-  const [step1Notes, setStep1Notes] = useState('');
-  const [collectedEvidence, setCollectedEvidence] = useState<string[]>([]);
-  const [selectedStance, setSelectedStance] = useState<'pro' | 'con' | ''>('');
+  // 로컬 저장소에서 이전 작성 상태 복원
+  const savedData = loadStudentProgress().integratedDrafts[activity.id];
 
-  // Step 2 상태 (핸드오프 데이터 기반 산출물)
-  const [step2Output, setStep2Output] = useState('');
-  const [completedHandoff, setCompletedHandoff] = useState(false);
+  const [currentStep, setCurrentStep] = useState<1 | 2>(savedData?.currentStep || 1);
+  const [step1Notes, setStep1Notes] = useState(savedData?.step1Notes || '');
+  const [collectedEvidence, setCollectedEvidence] = useState<string[]>(savedData?.evidence || []);
+  const [selectedStance, setSelectedStance] = useState<'pro' | 'con' | ''>(savedData?.stance || '');
+  const [step2Output, setStep2Output] = useState(savedData?.step2Output || '');
+  const [completedHandoff, setCompletedHandoff] = useState(Boolean(savedData?.step1Notes));
   const [feedbackMsg, setFeedbackMsg] = useState('');
+  const [smartReport, setSmartReport] = useState<SmartSensorReportData | null>(null);
 
   // 복수 지문 탭 및 뷰 모드 상태
   const [activePassageIndex, setActivePassageIndex] = useState(0);
   const [isSideBySide, setIsSideBySide] = useState(false);
 
+  // 과업 변경 시 해당 과업 데이터 복원
+  useEffect(() => {
+    const p = loadStudentProgress().integratedDrafts[activity.id];
+    if (p) {
+      setCurrentStep(p.currentStep || 1);
+      setStep1Notes(p.step1Notes || '');
+      setCollectedEvidence(p.evidence || []);
+      setSelectedStance(p.stance || '');
+      setStep2Output(p.step2Output || '');
+      setCompletedHandoff(Boolean(p.step1Notes));
+      if (p.step2Output && onStudentOutputChange) {
+        onStudentOutputChange(p.step2Output);
+      }
+    } else {
+      setCurrentStep(1);
+      setStep1Notes('');
+      setCollectedEvidence([]);
+      setSelectedStance('');
+      setStep2Output('');
+      setCompletedHandoff(false);
+    }
+    setFeedbackMsg('');
+  }, [activity.id]);
 
-  // 핸드오프 실행 (Step 1 ➔ Step 2)
+  // 로컬 저장 헬퍼
+  const saveProgressToStorage = (updates: Partial<{
+    step1Notes: string;
+    evidence: string[];
+    stance: 'pro' | 'con' | '';
+    step2Output: string;
+    currentStep: 1 | 2;
+  }>) => {
+    const progress = loadStudentProgress();
+    const currentDraft = progress.integratedDrafts[activity.id] || {
+      step1Notes: '',
+      evidence: [],
+      stance: '',
+      step2Output: '',
+      currentStep: 1,
+    };
+    const updatedDraft = { ...currentDraft, ...updates };
+
+    saveStudentProgress({
+      integratedDrafts: {
+        ...progress.integratedDrafts,
+        [activity.id]: updatedDraft,
+      },
+      studentOutput: updates.step2Output !== undefined ? updates.step2Output : progress.studentOutput,
+    });
+  };
+
+  const handleStep1NotesChange = (text: string) => {
+    setStep1Notes(text);
+    saveProgressToStorage({ step1Notes: text });
+  };
+
+  const handleStep2OutputChange = (text: string) => {
+    setStep2Output(text);
+    if (onStudentOutputChange) onStudentOutputChange(text);
+    saveProgressToStorage({ step2Output: text });
+  };
+
+  // 생각 이어쓰기 실행 (Step 1 ➔ Step 2)
   const handleHandoff = () => {
     setCurrentStep(2);
     setCompletedHandoff(true);
+    saveProgressToStorage({ currentStep: 2 });
 
     const handoffPayload = {
       notes: step1Notes,
@@ -51,34 +116,61 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
         historyCount: prev.memory.historyCount + 1,
         keyInsights: [
           ...prev.memory.keyInsights,
-          `Step 1 완료: [${step1Notes.slice(0, 20)}...] 데이터가 Step 2로 핸드오프됨`
+          `1단계 생각 정리: [${step1Notes.slice(0, 20)}...] 내용이 2단계 글쓰기로 안전하게 전달됨`
         ]
       },
       loop: {
         ...prev.loop,
-        currentStep: 'Step 2 핸드오프 연계 과업 진행 중'
+        currentStep: '2단계 생각 이어쓰기 과업 진행 중'
       }
     }));
   };
 
-  // Step 2 최종 제출
+  // 학술 대체어 원클릭 치환 함수
+  const handleApplySuggestion = (original: string, replacement: string) => {
+    const regex = new RegExp(`\\b${original}\\b`, 'i');
+    const newText = step2Output.replace(regex, replacement);
+    handleStep2OutputChange(newText);
+
+    const referencePassage = activity.readingPassage || 
+      activity.multiPassages?.map(p => p.passage || p.script || '').join(' ');
+    const report = runFullSmartSensorInspection(newText, referencePassage, 60);
+    setSmartReport(report);
+  };
+
+  // Step 2 최종 제출 및 지능형 센서 검사
   const handleSubmitStep2 = () => {
     if (onStudentOutputChange) {
       onStudentOutputChange(step2Output);
     }
-    setFeedbackMsg('🎉 연계 활동 완료! Step 1의 입력 컨텍스트가 Step 2의 완성 산출물로 성공적으로 연결되었습니다.');
+
+    const referencePassage = activity.readingPassage || 
+      activity.multiPassages?.map(p => p.passage || p.script || '').join(' ');
+
+    const report = runFullSmartSensorInspection(step2Output, referencePassage, 60);
+    setSmartReport(report);
+
+    const vocab = report.vocabulary;
+    const awlList = vocab.awlWordsFound.slice(0, 3).join(', ');
+
+    setFeedbackMsg('🎉 연계 활동 완료! 1단계에서 정리한 핵심 생각과 근거가 2단계 완성 산출물로 훌륭하게 이어졌습니다.');
 
     updateHarnessStatus(prev => ({
       ...prev,
       sensor: {
-        name: '통합 연계(Integrated Handoff) 완결성 센서',
-        currentScore: 98,
-        status: 'passed',
-        feedback: '우수! 1단계 메모 및 증거를 바탕으로 2단계 복합 과업을 완벽히 완성함.'
+        name: '생각 이어쓰기 완결성 & CEFR 어휘 프로파일러 센서',
+        currentScore: report.overallScore,
+        status: report.status,
+        feedback: report.feedbackSummary,
+      },
+      loop: {
+        ...prev.loop,
+        attempts: prev.loop.attempts + 1,
+        currentStep: '2단계 최종 에세이 진단 완료',
       },
       observability: {
         ...prev.observability,
-        neisObservationLog: `[${activity.title}] 2단계 연계 활동에서 1단계의 분석적 사고 결과를 2단계 표현 산출물로 유실 없이 통합 전이(Handoff)하는 뛰어난 메타인지 학습 역량을 보임.`
+        neisObservationLog: `[${activity.title}] 2단계 연계 활동에서 1단계의 분석적 사고 결과를 2단계 표현 산출물로 유실 없이 통합 전이함. 어휘 다양성(TTR ${vocab.ttr}%) 및 학술 어휘(${vocab.levels.advanced.percentage + vocab.levels.awl.percentage}%)${awlList ? `(${awlList} 등)` : ''}를 논리적 연결사와 함께 조화롭게 구사함.`
       }
     }));
   };
@@ -107,28 +199,34 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
         {/* 2단계 인디케이터 */}
         <div className="flex items-center gap-2 bg-[#F8F6F0] p-1.5 rounded-xl border border-stone-200 text-xs">
           <button
-            onClick={() => setCurrentStep(1)}
-            className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1 transition-all ${
+            onClick={() => {
+              setCurrentStep(1);
+              saveProgressToStorage({ currentStep: 1 });
+            }}
+            className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1 transition-all cursor-pointer ${
               currentStep === 1
                 ? 'bg-honey-400 text-slateText-title shadow-xs'
                 : 'text-stone-500 hover:text-stone-800'
             }`}
           >
-            <span>1단계</span>
+            <span>1단계 (내용 정리)</span>
             {completedHandoff && <CheckCircle2 className="w-3 h-3 text-emerald-700" />}
           </button>
           <ArrowRight className="w-3 h-3 text-stone-400" />
           <button
             onClick={() => {
-              if (completedHandoff || step1Notes.trim()) setCurrentStep(2);
+              if (completedHandoff || step1Notes.trim()) {
+                setCurrentStep(2);
+                saveProgressToStorage({ currentStep: 2 });
+              }
             }}
-            className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1 transition-all ${
+            className={`px-3 py-1 rounded-lg font-bold flex items-center gap-1 transition-all cursor-pointer ${
               currentStep === 2
                 ? 'bg-honey-400 text-slateText-title shadow-xs'
                 : 'text-stone-500 hover:text-stone-800'
             }`}
           >
-            <span>2단계 (핸드오프)</span>
+            <span>2단계 (생각 이어쓰기)</span>
           </button>
         </div>
       </div>
@@ -280,26 +378,26 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
           {/* 1단계 메모 작성 영역 */}
           <div>
             <label className="block text-xs font-bold text-slateText-title mb-1.5 flex items-center justify-between">
-              <span>📝 1단계 핵심 메모 (Cornell Notes / Evidence Box)</span>
-              <span className="text-[11px] text-stone-400">2단계로 전송될 Handoff Packet</span>
+              <span>📝 1단계 핵심 생각 정리 (코넬 메모 / 핵심 근거)</span>
+              <span className="text-[11px] text-emerald-600 font-medium">실시간 자동 저장 중</span>
             </label>
             <textarea
               rows={4}
               value={step1Notes}
-              onChange={(e) => setStep1Notes(e.target.value)}
-              placeholder="음원이나 지문에서 파악한 핵심 단어, 5W1H 정보, 인과관계, 찬반 논거 등을 영어 또는 한국어로 자유롭게 정리하세요..."
+              onChange={(e) => handleStep1NotesChange(e.target.value)}
+              placeholder="음원이나 지문에서 파악한 핵심 단어, 주요 사실, 인과관계, 찬반 논거 등을 영어 또는 한국어로 자유롭게 정리하세요... (2단계 글쓰기로 자동 전달됩니다)"
               className="w-full p-3.5 text-xs bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-honey-500 shadow-inner leading-relaxed"
             />
           </div>
 
-          {/* 핸드오프 전환 버튼 */}
+          {/* 2단계 전환 버튼 */}
           <div className="flex justify-end pt-2">
             <button
               onClick={handleHandoff}
               disabled={!step1Notes.trim()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-honey-400 hover:bg-honey-500 disabled:opacity-50 text-slateText-title font-bold text-xs rounded-xl shadow-xs transition-colors"
+              className="flex items-center gap-2 px-5 py-2.5 bg-honey-400 hover:bg-honey-500 disabled:opacity-50 text-slateText-title font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
             >
-              <span>1단계 메모 저장 및 2단계로 Handoff 전달</span>
+              <span>1단계 메모 저장하고 2단계 글쓰기로 이동</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -307,7 +405,7 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
       )}
 
       {/* ============================================================ */}
-      {/* 2단계 화면 (핸드오프 데이터 활용 산출물 도출) */}
+      {/* 2단계 화면 (1단계 메모를 바탕으로 글 완성) */}
       {/* ============================================================ */}
       {currentStep === 2 && (
         <div className="space-y-5">
@@ -316,20 +414,23 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
               {activity.handoffInstruction?.step2Title}
             </h4>
             <p className="text-xs text-emerald-800 leading-relaxed">
-              1단계에서 정리한 메모가 하네스 메모리 층에 안전하게 로드되었습니다. 이를 바탕으로 최종 산출물을 완성하세요.
+              1단계에서 정리한 메모가 안전하게 연결되었습니다. 이를 바탕으로 최종 산출물을 완성하세요.
             </p>
           </div>
 
-          {/* 1단계에서 넘어온 Handoff 메모 카드 표시 */}
+          {/* 1단계에서 넘어온 메모 카드 표시 */}
           <div className="bg-stone-50 p-4 rounded-xl border border-stone-200">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-bold text-slateText-title flex items-center gap-1.5">
                 <Database className="w-3.5 h-3.5 text-honey-600" />
-                [Handoff Memory] 1단계에서 전달된 메모 패킷
+                [기억된 생각] 1단계에서 정리한 핵심 메모
               </span>
               <button
-                onClick={() => setCurrentStep(1)}
-                className="text-[11px] text-honey-700 hover:underline flex items-center gap-1"
+                onClick={() => {
+                  setCurrentStep(1);
+                  saveProgressToStorage({ currentStep: 1 });
+                }}
+                className="text-[11px] text-honey-700 hover:underline flex items-center gap-1 cursor-pointer"
               >
                 <FileEdit className="w-3 h-3" /> 메모 수정하기
               </button>
@@ -341,10 +442,13 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
 
           {/* 활동 유형에 따른 2단계 입력창 */}
           <div>
-            <label className="block text-xs font-bold text-slateText-title mb-1.5">
-              {activity.mode === 'listen-speak'
-                ? '🗣️ AI 토론 에이전트에 대응하는 반론 스피치'
-                : '✍️ 메모를 종합한 최종 영문 에세이 / 공지문'}
+            <label className="block text-xs font-bold text-slateText-title mb-1.5 flex items-center justify-between">
+              <span>
+                {activity.mode === 'listen-speak'
+                  ? '🗣️ AI 토론 파트너에 대응하는 나의 주장 스피치'
+                  : '✍️ 1단계 메모를 바탕으로 작성하는 영문 완성문'}
+              </span>
+              <span className="text-[11px] text-emerald-600 font-medium">실시간 자동 저장 중</span>
             </label>
 
             {activity.mode === 'listen-speak' ? (
@@ -355,33 +459,33 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
                 <textarea
                   rows={4}
                   value={step2Output}
-                  onChange={(e) => setStep2Output(e.target.value)}
-                  placeholder="위 AI 파트너의 반론에 대응하여 자신의 논거(Claim + Reason + Example)를 영어로 작성하거나 구술하세요..."
-                  className="w-full p-3.5 text-xs bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-honey-500 leading-relaxed"
+                  onChange={(e) => handleStep2OutputChange(e.target.value)}
+                  placeholder="위 AI 파트너의 반론에 대응하여 자신의 논거(주장 + 이유 + 예시)를 영어로 작성하거나 구술하세요..."
+                  className="w-full p-3.5 text-xs bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-honey-500 leading-relaxed shadow-inner"
                 />
               </div>
             ) : (
               <textarea
                 rows={6}
                 value={step2Output}
-                onChange={(e) => setStep2Output(e.target.value)}
-                placeholder="1단계 메모의 핵심 어휘와 팩트를 인용하여 완성된 영문 텍스트를 작성하세요..."
+                onChange={(e) => handleStep2OutputChange(e.target.value)}
+                placeholder="1단계 메모의 핵심 어휘와 사실을 인용하여 완성된 영문 에세이를 작성하세요..."
                 className="w-full p-3.5 text-xs font-mono bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-emerald-500 leading-relaxed shadow-inner"
               />
             )}
           </div>
 
-          {/* 최종 제출 및 하네스 검증 */}
+          {/* 최종 제출 및 검증 */}
           <div className="flex items-center justify-between pt-2">
             <span className="text-xs text-stone-400">
-              * 완결성 센서가 1단계 메모와 2단계 작문의 연계성을 자동 평가합니다.
+              * 1단계 메모 내용이 2단계 완성문에 얼마나 잘 연결되었는지 점검합니다.
             </span>
             <button
               onClick={handleSubmitStep2}
               disabled={!step2Output.trim()}
-              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-colors"
+              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
             >
-              연계 활동 최종 제출 및 하네스 검증
+              연계 활동 최종 제출 및 피드백 확인
             </button>
           </div>
 
@@ -389,6 +493,14 @@ export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
             <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium leading-relaxed">
               {feedbackMsg}
             </div>
+          )}
+
+          {/* 지능형 센서 리포트 및 학술 대체어 치환 패널 */}
+          {smartReport && (
+            <IntelligentSensorReport 
+              report={smartReport} 
+              onApplySuggestion={handleApplySuggestion} 
+            />
           )}
         </div>
       )}

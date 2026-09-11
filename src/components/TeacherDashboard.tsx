@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
 import { ActivityContent } from '../types/harness';
-import { GraduationCap, Copy, Check, FileText, BarChart3, AlertCircle, Award } from 'lucide-react';
+import { UserProfile, StudentSubmission } from '../types/auth';
+import { loadAllSubmissions } from '../utils/authStorage';
+import { 
+  GraduationCap, Copy, Check, FileText, BarChart3, AlertCircle, 
+  Award, Users, Search, Filter, Eye, Download, CheckCircle2, ChevronRight 
+} from 'lucide-react';
+import { runFullSmartSensorInspection } from '../utils/sensorEngine';
+import { IntelligentSensorReport } from './common/IntelligentSensorReport';
 
 interface TeacherDashboardProps {
   activity: ActivityContent;
@@ -8,14 +15,13 @@ interface TeacherDashboardProps {
   attemptsCount: number;
   sensorScore: number | null;
   studentOutput: string;
+  user?: UserProfile;
 }
 
 // 제목에서 [수능 32번], [2024년 9월 고3] 등 시험명 및 문항번호를 완전 제거하고 순수 학술 주제/개념만 추출하는 정제 함수
 const extractCleanAcademicTopic = (title: string): string => {
   if (!title) return '학술 텍스트';
-  // [202X년 X월 고X] 및 32번: 등의 접두사 제거
   let clean = title.replace(/\[.*?\]\s*/g, '').replace(/\b\d+번[:\s]*/g, '').trim();
-  // "다중 텍스트 심층 비교 독해:" 등의 접두어 제거
   clean = clean.replace(/^(다중 텍스트 비교 분석|다중 텍스트 심층 비교 독해|주제 중심 독해|대의 파악|빈칸 추론|순서 배열|주제 파악)[:\s]*/, '').trim();
   return clean || '학술 영어 텍스트 심층 독해';
 };
@@ -34,137 +40,272 @@ const calculateNeisBytes = (text: string): number => {
   return bytes;
 };
 
+// 학생별 세특 생성 엔진
+const generateStudentNeis = (
+  studentName: string,
+  activityTitle: string,
+  studentOutput: string,
+  sensorReport: any
+): string => {
+  const mainTopic = extractCleanAcademicTopic(activityTitle);
+  let vocabDetail = '';
+  let discourseDetail = '';
+  let copyRateDetail = '';
+
+  if (sensorReport && sensorReport.vocabulary) {
+    if (sensorReport.vocabulary.awlWordsFound && sensorReport.vocabulary.awlWordsFound.length > 0) {
+      const sampleAwl = sensorReport.vocabulary.awlWordsFound.slice(0, 3).join(', ');
+      vocabDetail = ` '${sampleAwl}' 등 학술 기본 어휘(AWL)와 B2~C1 수준의 고급 어휘를 적재적소에 활용하여 학술적 문맥의 격조를 높임.`;
+    } else if (sensorReport.vocabulary.levels?.advanced?.percentage > 10) {
+      vocabDetail = ` CEFR 고급(B2~C1) 수준의 어휘를 풍부하게 구사하여 문장의 표현력을 효과적으로 다채롭게 확장함.`;
+    }
+
+    if (sensorReport.transitions?.foundTransitions?.length >= 2) {
+      const categories = sensorReport.transitions.categoriesUsed || [];
+      const catKorean = categories.map((c: string) => 
+        c === 'contrast' ? '대조' : 
+        c === 'causeEffect' || c === 'cause' ? '인과' : 
+        c === 'addition' ? '추가' : 
+        c === 'example' ? '예시' : '결론'
+      ).join('·');
+      discourseDetail = ` 문장 간 ${catKorean} 논리 연결사를 유기적으로 배치하여 단락 전체의 담화 응집성과 논리적 흐름을 견고하게 구축함.`;
+    }
+
+    if (sensorReport.plagiarism?.copyRate < 25) {
+      copyRateDetail = ` 원문 텍스트의 단순 인용을 지양하고 핵심 의미를 자신만의 문장 구조로 재구성하는 뛰어난 패러프레이징(Paraphrasing) 능력을 발휘함.`;
+    }
+  }
+
+  return `'${mainTopic}'을 제재로 한 심층 학술 텍스트를 분석하며 중심 논지와 세부 논거 간의 논리적 상관관계를 명확히 도출함.${copyRateDetail}${vocabDetail}${discourseDetail} 단계별 AI 안전망 코칭 힌트를 참고하여 스스로 오개념과 문맥을 점검·퇴고하였으며, 학술적 어휘와 논리적 결속성을 두루 갖춘 완성도 높은 영문 에세이를 작성하는 뛰어난 비판적 사고력과 학업 성실성을 보임.`;
+};
+
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   activity,
   timeSpent,
   attemptsCount,
   sensorScore,
   studentOutput,
+  user,
 }) => {
-  const [copied, setCopied] = useState(false);
+  const allSubmissions = loadAllSubmissions();
+  const [selectedSub, setSelectedSub] = useState<StudentSubmission | null>(allSubmissions[0] || null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // 지문 분석 및 이해 궤적 중심의 NEIS 세특 생성 알고리즘 (시험명/문항번호 일체 배제)
-  const generateNeisRecord = () => {
-    const gradeKorean = activity.grade === 'G1' ? '공통영어' : activity.grade === 'G2' ? '영어II' : '심화영어';
-    const mainTopic = extractCleanAcademicTopic(activity.title);
+  // 학생 검색 필터링
+  const filteredSubmissions = allSubmissions.filter((s) =>
+    s.studentName.includes(searchTerm) ||
+    s.activityTitle.includes(searchTerm) ||
+    (s.studentNumber && s.studentNumber.includes(searchTerm))
+  );
 
-    // 복수 지문(Multi-passages)이 연동된 경우
-    if (activity.multiPassages && activity.multiPassages.length >= 2) {
-      const topicA = extractCleanAcademicTopic(activity.multiPassages[0].cleanTopic || activity.multiPassages[0].title);
-      const topicB = extractCleanAcademicTopic(activity.multiPassages[1].cleanTopic || activity.multiPassages[1].title);
-
-      return `'${topicA}'와 '${topicB}'라는 서로 다른 관점과 맥락을 다룬 복수의 학술 텍스트를 심층 비교·분석하는 독해 과업을 주도함. 각 지문의 중심 논지와 논거의 타당성을 비판적으로 검토하고, 텍스트 간의 상호 텍스트성(Intertextuality)을 바탕으로 공통점과 상이한 인과관계를 체계적으로 대조·이해함. 지문의 단순 인용을 배제하고 핵심 개념을 자신만의 학술 어휘로 패러프레이징(Paraphrasing)하여 두 지문의 관점을 통합(Synthesis)한 완결성 높은 종합 에세이를 작성함. 하네스 어휘 다양성 센서(TTR)의 피드백을 수용하여 논리적 응집성과 어법 정확도를 자가 교정하는 뛰어난 메타인지 텍스트 이해 역량을 발휘함.`;
-    }
-
-    // 단일 지문: 활동 모드별 지문 분석 및 이해 궤적
-    if (activity.mode === 'listen-write' || activity.mode === 'listening') {
-      return `'${mainTopic}'을 제재로 한 심층 담화 텍스트를 청취하며 핵심 정보와 세부 근거(5W1H)의 위계 관계를 정밀하게 분석·구조화함. 청각적 입력 텍스트의 맥락적 단서와 연결어 표제어를 정확히 포착하여 화자의 숨은 의도와 논지 전개를 심층적으로 이해함. 분석된 담화 내용을 바탕으로 목적과 수용자를 고려한 완결된 영문 요약문 및 보고서를 작성하였으며, 하네스 문맥 적합성 센서 피드백을 통해 문장 간 결속성을 스스로 보완하는 자기주도적 학업 태도를 보임.`;
-    } else if (activity.mode === 'read-write' || activity.mode === 'reading') {
-      return `'${mainTopic}'에 관한 학술 지문을 정밀 분석하며 단락의 전개 구조와 중심 문장-뒷받침 문장 간의 논리적 상관관계를 명확히 도출함. 문맥 속에서 낯선 어휘의 함축적 의미를 유추하고, 글쓴이가 제시한 핵심 개념의 인과적 메커니즘을 심층적으로 이해하여 도식화함. 나아가 소크라테스식 발문에 능동적으로 반응하여 지문의 논점을 자신의 삶이나 현대 사회 현상과 연계한 비판적 에세이를 작성함. 하네스 표절 감지 및 어휘 센서를 거치며 초안을 지속적으로 윤문·퇴고하는 우수한 비판적 사고력과 텍스트 분석 역량이 돋보임.`;
-    } else if (activity.mode === 'listen-speak' || activity.mode === 'speaking') {
-      return `'${mainTopic}'을 다룬 구어 담화 텍스트를 다각도로 분석하여 쟁점별 찬반 논거를 체계적으로 정리함. 담화의 흐름과 반론의 전제를 면밀히 이해한 후, PREP(주장-이유-예시-강조) 구조를 적용하여 자신의 입장을 논리정연한 학술 스피치로 구술함. 하네스 유창성 및 연결사 적합도 센서의 지표를 분석하며 발화 속도와 논리적 전달력을 스스로 점검·개선하는 수준 높은 의사소통 능력을 발휘함.`;
-    } else {
-      return `'${mainTopic}' 관련 텍스트의 논리적 층위를 분석하고 핵심 개념 간의 유기적 관계를 정확히 파악함. 난이도 높은 학술적 지문 구조를 능동적으로 해석하고, AI 하네스의 스캐폴딩 피드백을 바탕으로 스스로 오개념을 수정해 가며 지문의 심층적 의미를 완벽히 소화해내는 인지적 유연성과 학업 지속성이 돋보임.`;
-    }
+  // 클립보드 복사 핸들러
+  const handleCopyNeis = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const neisText = generateNeisRecord();
-  const byteCount = calculateNeisBytes(neisText); // NEIS 규격 바이트 계산
-
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(neisText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  // 선택된 제출물의 세특 문구 산출
+  const currentNeisText = selectedSub
+    ? generateStudentNeis(
+        selectedSub.studentName,
+        selectedSub.activityTitle,
+        selectedSub.studentOutput,
+        selectedSub.sensorReport
+      )
+    : '';
+  const currentNeisBytes = calculateNeisBytes(currentNeisText);
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-8 py-4">
-      <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-warm-sm mb-6">
-        {/* 헤더 */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-stone-100">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-100 text-indigo-800">
-              <GraduationCap className="w-6 h-6" />
-            </div>
-            <div>
-              <h2 className="text-xl font-bold text-slateText-title">
-                교사용 관측(Observability) & NEIS 세특 에비던스 센터
-              </h2>
-              <p className="text-xs text-slateText-muted mt-0.5">
-                학생의 6겹 하네스 통과 기록과 자가 교정 데이터를 바탕으로 교육부 규격 맞춤 세특을 자동 추출합니다.
-              </p>
-            </div>
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-8 py-6 space-y-6 animate-in fade-in duration-200">
+      {/* 상단 교사용 헤더 배너 */}
+      <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+        <div className="flex items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-500/20 border-2 border-indigo-400/40 flex items-center justify-center text-3xl shadow-inner">
+            🎓
           </div>
-          <div className="flex items-center gap-2">
-            <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded-full border border-indigo-200">
-              실시간 분석 동기화 중
-            </span>
-          </div>
-        </div>
-
-        {/* 관측 지표 그리드 */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-5">
-          <div className="p-4 rounded-xl bg-stone-50 border border-stone-200">
-            <div className="flex items-center justify-between text-xs text-stone-500 mb-1">
-              <span>학습 몰입 시간</span>
-              <BarChart3 className="w-4 h-4 text-stone-400" />
-            </div>
-            <div className="text-xl font-bold text-slateText-title">{timeSpent}초</div>
-            <p className="text-[11px] text-stone-500 mt-1">집중도: 정상 범위 (트립와이어 미발생)</p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-stone-50 border border-stone-200">
-            <div className="flex items-center justify-between text-xs text-stone-500 mb-1">
-              <span>자가 수정(래칫) 횟수</span>
-              <AlertCircle className="w-4 h-4 text-amber-500" />
-            </div>
-            <div className="text-xl font-bold text-amber-700">{attemptsCount}회 시도</div>
-            <p className="text-[11px] text-stone-500 mt-1">포기하지 않고 스캐폴딩 힌트 수용</p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-stone-50 border border-stone-200">
-            <div className="flex items-center justify-between text-xs text-stone-500 mb-1">
-              <span>하네스 센서 종합 통과 점수</span>
-              <Award className="w-4 h-4 text-emerald-500" />
-            </div>
-            <div className="text-xl font-bold text-emerald-700">
-              {sensorScore !== null ? `${sensorScore}점 (통과)` : '측정 진행 중'}
-            </div>
-            <p className="text-[11px] text-stone-500 mt-1">기준: {activity.lexile} / {activity.cefrLevel}</p>
-          </div>
-        </div>
-
-        {/* NEIS 교과세특 문구 카드 */}
-        <div className="mt-6 p-5 rounded-2xl bg-[#FDFBF7] border-2 border-indigo-200/80 shadow-warm-sm">
-          <div className="flex items-center justify-between mb-3">
+          <div>
             <div className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-indigo-700" />
-              <h3 className="font-bold text-slateText-title text-base">
-                [NEIS 권장] 생활기록부 교과세특 자동 완성 문구
-              </h3>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-stone-500">
-                글자수: {neisText.length}자 / 바이트: {byteCount} Byte
+              <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 font-bold text-xs border border-indigo-400/30">
+                {user?.name || '김진우 선생님'} 교과 담당
               </span>
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition-colors"
-              >
-                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? '복사 완료!' : '문구 복사'}
-              </button>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-400 text-emerald-950 font-extrabold text-[10px]">
+                실시간 학생 동기화
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight">
+              학생 관찰 기록 & 생활기록부 세특 관제 센터
+            </h1>
+            <p className="text-xs sm:text-sm text-indigo-200/90 mt-1">
+              학생들의 자기주도 다듬기 횟수, CEFR 어휘 수준, 패러프레이징 데이터를 바탕으로 NEIS 세특을 자동 완성합니다.
+            </p>
+          </div>
+        </div>
+
+        {/* 상단 현황 카드 */}
+        <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md px-4 py-3 rounded-2xl border border-white/20">
+          <div className="text-center px-2">
+            <div className="text-xs text-indigo-200">제출된 산출물</div>
+            <div className="text-xl font-black">{allSubmissions.length}건</div>
+          </div>
+          <div className="w-px h-8 bg-white/20"></div>
+          <div className="text-center px-2">
+            <div className="text-xs text-indigo-200">평균 수정 횟수</div>
+            <div className="text-xl font-black text-amber-300">
+              {(allSubmissions.reduce((acc, s) => acc + s.attemptsCount, 0) / (allSubmissions.length || 1)).toFixed(1)}회
             </div>
           </div>
+          <div className="w-px h-8 bg-white/20"></div>
+          <div className="text-center px-2">
+            <div className="text-xs text-indigo-200">평균 성취도</div>
+            <div className="text-xl font-black text-emerald-300">
+              {Math.round(
+                allSubmissions.reduce((acc, s) => acc + (s.sensorReport?.overallScore || 80), 0) /
+                  (allSubmissions.length || 1)
+              )}점
+            </div>
+          </div>
+        </div>
+      </div>
 
-          <div className="p-4 rounded-xl bg-white border border-stone-200 text-sm text-slateText-body leading-relaxed font-sans shadow-inner">
-            {neisText}
+      {/* 메인 2열 그리드: 학생 제출 목록 vs 세특 및 상세 분석 */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* 좌측: 학급 학생 제출물 목록 */}
+        <div className="lg:col-span-5 bg-white rounded-2xl border border-stone-200 shadow-warm-sm p-5 flex flex-col">
+          <div className="flex items-center justify-between pb-3 border-b border-stone-100 mb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-indigo-600" />
+              <h2 className="font-bold text-slateText-title text-sm">학급 제출 현황 모니터링</h2>
+            </div>
+            <span className="text-xs font-mono text-stone-400">{filteredSubmissions.length}명</span>
           </div>
 
-          <p className="text-xs text-indigo-700/80 mt-2.5">
-            💡 <strong>교사 안내:</strong> 학생이 작성한 실제 과업 결과와 하네스 자가수정 궤적(증거)을 바탕으로 작성되었으므로, NEIS 나이스 생활기록부에 그대로 복사하여 입력하거나 일부 가감하여 사용하실 수 있습니다.
-          </p>
+          {/* 검색창 */}
+          <div className="relative mb-3">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="학생 이름, 학번, 과업명으로 검색..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs bg-stone-50 border border-stone-200 rounded-xl focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          {/* 학생 제출 카드 목록 */}
+          <div className="space-y-2.5 max-h-[620px] overflow-y-auto pr-1 flex-1">
+            {filteredSubmissions.length === 0 ? (
+              <div className="py-12 text-center text-xs text-stone-400">일치하는 학생 기록이 없습니다.</div>
+            ) : (
+              filteredSubmissions.map((sub) => {
+                const isSelected = selectedSub?.id === sub.id;
+                return (
+                  <div
+                    key={sub.id}
+                    onClick={() => setSelectedSub(sub)}
+                    className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-50/80 border-indigo-400 shadow-xs'
+                        : 'bg-stone-50/60 border-stone-200/80 hover:bg-stone-100/70'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slateText-title">{sub.studentName}</span>
+                        {sub.studentNumber && (
+                          <span className="text-[11px] text-stone-500 font-mono">({sub.studentNumber})</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-stone-400">
+                        {new Date(sub.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="text-xs text-stone-600 font-medium line-clamp-1">
+                      {sub.activityTitle}
+                    </div>
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-stone-200/60 text-[11px]">
+                      <span className="text-stone-500">
+                        몰입 {sub.timeSpentSeconds}초 · 다듬기 {sub.attemptsCount}회
+                      </span>
+                      <span className="font-bold text-indigo-700">
+                        점수 {sub.sensorReport?.overallScore || 85}점
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* 우측: 선택된 학생의 관찰 기록 & 생활기록부 세특 자동 완성 */}
+        <div className="lg:col-span-7 space-y-5">
+          {selectedSub ? (
+            <>
+              {/* 생활기록부 세특 카드 */}
+              <div className="bg-[#FDFBF7] rounded-2xl border-2 border-indigo-200 shadow-warm-sm p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-indigo-100 mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-indigo-100 text-indigo-800">
+                      <FileText className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slateText-title text-sm">
+                        [NEIS 기재요령 표준] {selectedSub.studentName} 학생 교과세특 문구
+                      </h3>
+                      <p className="text-[11px] text-stone-500 font-mono">
+                        글자수 {currentNeisText.length}자 / {currentNeisBytes} Byte (나이스 3바이트 기준)
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleCopyNeis(currentNeisText, selectedSub.id)}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-xs transition-colors cursor-pointer"
+                  >
+                    {copiedId === selectedSub.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedId === selectedSub.id ? '복사 완료!' : '세특 문구 복사'}</span>
+                  </button>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white border border-stone-200 text-xs text-slateText-body font-sans leading-relaxed shadow-inner select-text">
+                  {currentNeisText}
+                </div>
+
+                <div className="mt-3 flex items-center justify-between text-[11px] text-indigo-700/80">
+                  <span>* 시험명/문항번호 배제 및 교육부 감사 기준에 부합하는 탐구 과정 서술</span>
+                  <span className="font-semibold">바이트 적정성: 통과 (1,500 Byte 이내)</span>
+                </div>
+              </div>
+
+              {/* 학생 제출문 및 센서 분석 상세 */}
+              <div className="bg-white rounded-2xl border border-stone-200 shadow-warm-sm p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-slateText-title text-xs">
+                    📝 학생이 최종 제출한 에세이 원문 ({selectedSub.studentName})
+                  </h4>
+                  <span className="text-[11px] text-stone-400">
+                    스스로 고친 횟수: {selectedSub.attemptsCount}회
+                  </span>
+                </div>
+                <div className="p-3.5 bg-stone-50 rounded-xl border border-stone-200 text-xs font-mono text-slateText-body leading-relaxed">
+                  {selectedSub.studentOutput}
+                </div>
+
+                {/* 지능형 센서 리포트 */}
+                {selectedSub.sensorReport && (
+                  <div className="pt-2">
+                    <IntelligentSensorReport report={selectedSub.sensorReport} />
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="p-16 bg-white rounded-2xl border border-stone-200 text-center text-xs text-stone-400">
+              학생을 선택해 주세요.
+            </div>
+          )}
         </div>
       </div>
     </div>

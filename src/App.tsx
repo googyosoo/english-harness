@@ -1,49 +1,65 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GradeLevel, ActivityMode, ActivityContent, HarnessLayerStatus } from './types/harness';
+import { UserProfile } from './types/auth';
 import { CURRICULUM_DATA } from './data/curriculumData';
 import { INITIAL_EXAM_BANK_SAMPLES, ExamBankItem } from './data/examBank';
 import { Header } from './components/Header';
 import { DashboardCards } from './components/DashboardCards';
 import { HarnessInspector } from './components/HarnessInspector';
 import { TeacherDashboard } from './components/TeacherDashboard';
+import { StudentDashboard } from './components/dashboard/StudentDashboard';
+import { LoginModal } from './components/auth/LoginModal';
 import { ExamBankModal } from './components/ExamBankModal';
 import { ListeningModule } from './components/modules/ListeningModule';
 import { ReadingModule } from './components/modules/ReadingModule';
 import { SpeakingModule } from './components/modules/SpeakingModule';
 import { WritingModule } from './components/modules/WritingModule';
 import { IntegratedModule } from './components/modules/IntegratedModule';
-import { Sparkles, ArrowLeft } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
+import { loadStudentProgress, saveStudentProgress, clearStudentProgress } from './utils/storage';
+import { loadCurrentUser, saveCurrentUser, logoutUser, saveSubmission } from './utils/authStorage';
+import { runFullSmartSensorInspection } from './utils/sensorEngine';
 
 export const App: React.FC = () => {
+  // 인증 및 사용자 세션 상태
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => loadCurrentUser());
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(() => !loadCurrentUser());
+
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | 'ALL'>('ALL');
   const [selectedMode, setSelectedMode] = useState<ActivityMode>('all');
-  const [activeTab, setActiveTab] = useState<'studio' | 'inspector' | 'teacher'>('studio');
+  const [activeTab, setActiveTab] = useState<'studio' | 'inspector' | 'teacher' | 'studentDashboard'>('studio');
   const [searchQuery, setSearchQuery] = useState('');
   const [isExamBankOpen, setIsExamBankOpen] = useState(false);
 
-  // 현재 선택된 과업 (기본값: 첫 번째 연계 과업)
-  const [selectedActivity, setSelectedActivity] = useState<ActivityContent>(CURRICULUM_DATA[0]);
+  // 로컬 저장소에서 이전 학습 기록 복원
+  const initialSaved = useRef(loadStudentProgress()).current;
+  const initialActivity = 
+    CURRICULUM_DATA.find((a) => a.id === initialSaved.selectedActivityId) || CURRICULUM_DATA[0];
 
-  // 학습 몰입 시간 측정
-  const [timeSpent, setTimeSpent] = useState<number>(0);
-  const [studentOutput, setStudentOutput] = useState<string>('');
+  // 현재 선택된 과업
+  const [selectedActivity, setSelectedActivity] = useState<ActivityContent>(initialActivity);
 
-  // 6겹 하네스 상태 관리
+  // 학습 몰입 시간 측정 (초)
+  const [timeSpent, setTimeSpent] = useState<number>(initialSaved.timeSpent || 0);
+  const [studentOutput, setStudentOutput] = useState<string>(initialSaved.studentOutput || '');
+  const [lastSavedAt, setLastSavedAt] = useState<string>(initialSaved.lastSavedAt || '방금 전');
+
+  // 6단계 학습 코칭 안전망 상태 관리
   const [harnessStatus, setHarnessStatus] = useState<HarnessLayerStatus>({
     guide: {
-      rule: '학생 대신 완성된 답안을 생성하지 않고 질문과 힌트로 비계를 제공한다.',
+      rule: 'AI가 답을 대신 써주지 않고 단계별 질문과 힌트로 생각을 이끕니다.',
       curriculumCode: '2022개정 [10영01-02] 세부 정보 파악 및 요약',
       rubricCriteria: '명확성(Clarity) 40%, 논리적 응집성 30%, 어법 정확성 30%',
       active: true,
     },
     sensor: {
-      name: '단어 일치도 및 린터 센서',
+      name: '어휘 다양성 및 문법·표현 점검',
       currentScore: null,
       status: 'idle',
       feedback: '학생 입력을 대기 중입니다.',
     },
     loop: {
-      attempts: 0,
+      attempts: initialSaved.attemptsCount || 0,
       maxAttempts: 3,
       currentStep: '1차 과업 수행 중',
       escalated: false,
@@ -54,19 +70,39 @@ export const App: React.FC = () => {
       keyInsights: [],
     },
     permission: {
-      allowAnswerGeneration: false, // 대필 차단
+      allowAnswerGeneration: false, // 대필 원천 차단
       allowScaffolding: true,
       tokenBudgetRemaining: 2000,
     },
     observability: {
       tripwireTriggered: false,
-      timeSpentSeconds: 0,
+      timeSpentSeconds: initialSaved.timeSpent || 0,
       failureClass: null,
       neisObservationLog: '',
     },
   });
 
-  // 타이머
+  // 로그인 성공 핸들러
+  const handleLoginSuccess = (user: UserProfile) => {
+    saveCurrentUser(user);
+    setCurrentUser(user);
+    setIsLoginModalOpen(false);
+    // 교사인 경우 교사 대시보드로, 학생인 경우 스튜디오 또는 학생 대시보드로 이동
+    if (user.role === 'teacher') {
+      setActiveTab('teacher');
+    } else {
+      setActiveTab('studio');
+    }
+  };
+
+  // 로그아웃 핸들러
+  const handleLogout = () => {
+    logoutUser();
+    setCurrentUser(null);
+    setIsLoginModalOpen(true);
+  };
+
+  // 타이머 & 주기적 자동 저장 (5초 주기)
   useEffect(() => {
     const timer = setInterval(() => {
       setTimeSpent((prev) => {
@@ -78,15 +114,68 @@ export const App: React.FC = () => {
             timeSpentSeconds: next,
           },
         }));
+
+        if (next % 5 === 0) {
+          saveStudentProgress({ timeSpent: next });
+          setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        }
         return next;
       });
     }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 과업 변경 시 가이드 업데이트
+  // 학생 산출물 변경 시 자동 저장 및 제출 기록 연동
+  const handleStudentOutputChange = (output: string) => {
+    setStudentOutput(output);
+    saveStudentProgress({ studentOutput: output });
+    
+    // 만약 학생으로 로그인되어 있고 유의미한 출력이 제출/완성되었을 때 제출물 DB에 보존
+    if (currentUser && currentUser.role === 'student' && output.trim().length > 20) {
+      const refPassage = selectedActivity.readingPassage || 
+        selectedActivity.multiPassages?.map(p => p.passage || p.script || '').join(' ') || '';
+      const report = runFullSmartSensorInspection(output, refPassage, 60);
+
+      saveSubmission({
+        studentId: currentUser.id,
+        studentName: currentUser.name,
+        studentNumber: currentUser.studentNumber,
+        activityId: selectedActivity.id,
+        activityTitle: selectedActivity.title,
+        grade: selectedActivity.grade,
+        mode: selectedActivity.mode,
+        timeSpentSeconds: timeSpent,
+        attemptsCount: harnessStatus.loop.attempts || 1,
+        studentOutput: output,
+        sensorReport: report,
+      });
+    }
+  };
+
+  // 초기화 함수
+  const handleResetProgress = () => {
+    if (window.confirm('작성 중인 모든 학습 내용과 메모를 처음 상태로 되돌리시겠습니까?')) {
+      clearStudentProgress();
+      setTimeSpent(0);
+      setStudentOutput('');
+      setLastSavedAt('방금 전');
+      setSelectedActivity(CURRICULUM_DATA[0]);
+      setHarnessStatus((h) => ({
+        ...h,
+        loop: { ...h.loop, attempts: 0, currentStep: '1차 과업 수행 중' },
+        memory: { handoffData: null, historyCount: 0, keyInsights: [] },
+        observability: { ...h.observability, timeSpentSeconds: 0, neisObservationLog: '' },
+      }));
+      window.location.reload();
+    }
+  };
+
+  // 과업 변경 시 가이드 업데이트 및 로컬 저장
   const handleSelectActivity = (activity: ActivityContent) => {
     setSelectedActivity(activity);
+    saveStudentProgress({ selectedActivityId: activity.id });
+    setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
     const curriculumCode =
       activity.grade === 'G1'
         ? '[10공통영어01-03] 대의 파악 및 단락 쓰기'
@@ -110,10 +199,11 @@ export const App: React.FC = () => {
   };
 
   // 기출 문항 제목에서 시험명/문항번호를 정제하여 순수 학술 주제만 추출
-  const cleanItemTopic = (rawTitle: string): string => {
-    if (!rawTitle) return '학술 텍스트';
-    let clean = rawTitle.replace(/\[.*?\]\s*/g, '').replace(/\b\d+번[:\s]*/g, '').trim();
-    return clean || '학술 영어 텍스트';
+  const cleanItemTopic = (title: string): string => {
+    if (!title) return '학술 텍스트 심층 독해';
+    let clean = title.replace(/\[.*?\]\s*/g, '').replace(/\b\d+번[:\s]*/g, '').trim();
+    clean = clean.replace(/^(다중 텍스트 비교 분석|다중 텍스트 심층 비교 독해|주제 중심 독해|대의 파악|빈칸 추론|순서 배열|주제 파악)[:\s]*/, '').trim();
+    return clean || '학술 영어 텍스트 심층 독해';
   };
 
   const handleLoadExamItem = (item: ExamBankItem) => {
@@ -230,53 +320,45 @@ export const App: React.FC = () => {
       lexile: item.lexile,
     }));
 
-    const cleanTopics = passages.map(p => p.cleanTopic);
-    const combinedReadingPassage = passages
-      .map((p, idx) => `[지문 ${idx + 1}: ${p.cleanTopic} (${p.year}년 ${p.exam} ${p.qNumber}번)]\n${p.passage || p.script || ''}`)
-      .join('\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n');
+    const cleanTitles = passages.map(p => `'${p.cleanTopic}'`).join(' 및 ');
 
-    const allWords = passages.flatMap(p => (p.words || []).map(w => w.word));
-    const uniqueKeywords = Array.from(new Set(allWords)).slice(0, 6);
-
-    const newActivity: ActivityContent = {
-      id: `multi-${Date.now()}`,
+    const combinedActivity: ActivityContent = {
+      id: `multi-exam-${Date.now()}`,
       grade: gradeLevel,
       mode: 'read-write',
-      title: `다중 텍스트 비교 분석: ${cleanTopics.slice(0, 2).join(' & ')}`,
-      subTitle: `${items.length}개 기출 지문(${items.map(i => `${i.year} ${i.exam} ${i.qNumber}번`).join(', ')}) 비교 대조 및 종합(Synthesis) 작문`,
-      badgeNumber: items.length,
-      cefrLevel: passages[0].cefrLevel || 'B2',
-      lexile: passages[0].lexile || '1150L',
-      tags: ['다중텍스트', '비교독해', 'Synthesis', `${items.length}개 지문`],
-      overview: `선택하신 ${items.length}개의 기출 지문을 교차 분석하고, 각 텍스트의 논리적 연결성과 상반된 관점을 비교하여 비판적 종합 에세이를 완성합니다.`,
-      readingPassage: combinedReadingPassage,
-      writingPrompt: `제시된 복수 지문 [${cleanTopics.slice(0, 2).join(']과 [')}]의 핵심 전제와 인과관계를 비교 분석하고, 두 관점을 종합(Synthesis)하여 자신만의 통찰을 120~160단어로 작성하세요.`,
+      title: `[복수 기출 연계 심층 분석] ${passages.map(p => `[${p.year} ${p.exam} ${p.qNumber}]`).join(' + ')}`,
+      subTitle: `${passages.length}개 기출 텍스트의 상호 텍스트성(Intertextuality) 비교 분석 및 Synthesis 에세이`,
+      badgeNumber: passages.length,
+      cefrLevel: 'B2~C1',
+      lexile: '1150L+',
+      tags: ['다중 지문', '기출 연계', '비교 독해', 'Synthesis 에세이'],
+      overview: `서로 다른 관점과 맥락을 다룬 ${passages.length}개의 기출 지문을 교차 분석합니다. 각 지문의 중심 논지와 인과관계를 비교·대조하고, 이를 통합하여 자신만의 학술 에세이를 완성합니다.`,
+      multiPassages: passages,
+      writingPrompt: `제시된 ${passages.length}개 기출 텍스트(${cleanTitles})의 핵심 논지와 상이한 논거를 종합 분석하고, 두 관점의 상호작용 또는 해결 방안에 대한 자신의 견해를 120~180단어로 작성하세요. (각 지문에서 최소 1개 이상의 핵심 개념을 인용·패러프레이징할 것)`,
       minWords: 100,
-      targetKeywords: uniqueKeywords.length > 0 ? uniqueKeywords : ['perspective', 'contrast', 'synthesis', 'evidence'],
       handoffInstruction: {
-        step1Title: `Step 1: ${items.length}개 텍스트 비교 분석 및 상호 대조 코넬 메모`,
-        step2Title: 'Step 2: 비교 관점을 융합한 Synthesis 종합 에세이 작성',
+        step1Title: 'Step 1: 다중 텍스트 비교 대조 및 핵심 논거 코넬 메모',
+        step2Title: 'Step 2: 메모를 바탕으로 한 다중 지문 Synthesis 에세이 작문',
         handoffKey: 'multiExamHandoff'
-      },
-      multiPassages: passages
+      }
     };
 
-    setSelectedActivity(newActivity);
+    setSelectedActivity(combinedActivity);
     setActiveTab('studio');
 
     setHarnessStatus(prev => ({
       ...prev,
       guide: {
         ...prev.guide,
-        rule: `[복수 기출 연동] ${items.length}개 다중 텍스트 비교 분석 가드레일`,
-        curriculumCode: `[12영어II/심화] 상호텍스트성 비교 및 비판적 Synthesis`,
-        rubricCriteria: `복수 텍스트 간 논리적 연계성 및 어휘 다양성(TTR) 검증`
+        rule: `[다중 기출 비교 독해] ${passages.length}개 지문 통합 가드레일`,
+        curriculumCode: `2022 개정 심화영어 [12심영02-05] 다중 텍스트 비판적 종합 분석`,
+        rubricCriteria: `1150L+ 다중 텍스트 간 논리적 연계성 및 Synthesis 역량 평가`
       },
       sensor: {
         ...prev.sensor,
         currentScore: null,
         status: 'idle',
-        feedback: `${items.length}개 문항이 다중 텍스트 스튜디오에 바인딩되었습니다.`
+        feedback: `${passages.length}개의 기출 지문이 연동되었습니다.`
       },
       loop: {
         ...prev.loop,
@@ -286,30 +368,43 @@ export const App: React.FC = () => {
       observability: {
         ...prev.observability,
         failureClass: null,
-        neisObservationLog: `복수의 학술 텍스트(${cleanTopics.slice(0, 2).join(', ')})를 비교 독해하고 상호 텍스트성을 바탕으로 비판적 에세이를 작성함.`
+        neisObservationLog: `${cleanTitles}를 제재로 한 복수의 학술 텍스트를 비교·분석하는 심층 독해 과업을 수행함.`
       }
     }));
   };
 
+  // 과업 필터링
+  const filteredActivities = CURRICULUM_DATA.filter((activity) => {
+    const matchesGrade = selectedGrade === 'ALL' || activity.grade === selectedGrade;
+    const matchesMode =
+      selectedMode === 'all'
+        ? true
+        : selectedMode === 'read-write'
+        ? activity.mode === 'read-write'
+        : selectedMode === 'listen-speak'
+        ? activity.mode === 'listen-speak'
+        : selectedMode === 'listen-write'
+        ? activity.mode === 'listen-write'
+        : activity.mode === selectedMode;
 
-  // 필터링된 활동 목록
-  const filteredActivities = CURRICULUM_DATA.filter((item) => {
-    if (selectedGrade !== 'ALL' && item.grade !== selectedGrade) return false;
-    if (selectedMode !== 'all' && item.mode !== selectedMode) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      return (
-        item.title.toLowerCase().includes(q) ||
-        item.subTitle.toLowerCase().includes(q) ||
-        item.tags.some((t) => t.toLowerCase().includes(q))
-      );
-    }
-    return true;
+    const matchesSearch =
+      searchQuery === '' ||
+      activity.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      activity.subTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      activity.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()));
+
+    return matchesGrade && matchesMode && matchesSearch;
   });
 
   return (
-    <div className="min-h-screen bg-[#FDFBF7] text-[#1E293B] flex flex-col font-sans selection:bg-honey-200">
-      {/* 상단 헤더 & 필터 바 */}
+    <div className="min-h-screen bg-[#FDFBF7] text-slateText-body flex flex-col font-sans selection:bg-honey-200 selection:text-slateText-title">
+      {/* 구글 SSO 로그인 모달 */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onLoginSuccess={handleLoginSuccess}
+      />
+
+      {/* 헤더 네비게이션 */}
       <Header
         currentGrade={selectedGrade}
         onSelectGrade={setSelectedGrade}
@@ -320,26 +415,31 @@ export const App: React.FC = () => {
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
         onOpenExamBank={() => setIsExamBankOpen(true)}
+        lastSavedAt={lastSavedAt}
+        onResetProgress={handleResetProgress}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        onOpenLoginModal={() => setIsLoginModalOpen(true)}
       />
 
-      {/* 2020~2026 기출 문제은행 모달 */}
+      {/* 기출 문제은행 모달 */}
       <ExamBankModal
         isOpen={isExamBankOpen}
         onClose={() => setIsExamBankOpen(false)}
-        examItems={INITIAL_EXAM_BANK_SAMPLES}
         onLoadExamItem={handleLoadExamItem}
         onLoadExamItems={handleLoadMultipleExamItems}
+        examItems={INITIAL_EXAM_BANK_SAMPLES}
       />
 
-      {/* 메인 컨텐츠 영역 */}
+      {/* 메인 뷰 컨테이너 */}
       <main className="flex-1 pb-16">
         {activeTab === 'studio' && (
           <>
-            {/* '처음이라면 이것부터' 추천 카드 섹션 */}
+            {/* 상단 큐레이션 과업 카드 그리드 (Pills 필터와 실시간 연동) */}
             <DashboardCards
               activities={filteredActivities}
-              onSelectActivity={handleSelectActivity}
               selectedActivityId={selectedActivity.id}
+              onSelectActivity={handleSelectActivity}
             />
 
             {/* 현재 선택된 과업의 인터랙티브 스튜디오 워크스페이스 */}
@@ -348,15 +448,23 @@ export const App: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-honey-500 animate-pulse"></span>
                   <h3 className="text-base font-bold text-slateText-title">
-                    진행 중인 활동 스튜디오: <span className="text-honey-700">{selectedActivity.title}</span>
+                    진행 중인 학습: <span className="text-honey-700">{selectedActivity.title}</span>
                   </h3>
                 </div>
-                <button
-                  onClick={() => setActiveTab('inspector')}
-                  className="text-xs font-semibold text-honey-700 hover:text-honey-800 hover:underline flex items-center gap-1"
-                >
-                  <Sparkles className="w-3.5 h-3.5" /> 6겹 하네스 동작 현황 보기
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setActiveTab('studentDashboard')}
+                    className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    📊 내 학습 대시보드 보기
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('inspector')}
+                    className="text-xs font-semibold text-honey-700 hover:text-honey-800 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> AI 6단계 코칭 상태
+                  </button>
+                </div>
               </div>
 
               {/* 활동 모드별 컴포넌트 마운트 */}
@@ -364,7 +472,7 @@ export const App: React.FC = () => {
                 <IntegratedModule
                   activity={selectedActivity}
                   updateHarnessStatus={setHarnessStatus}
-                  onStudentOutputChange={setStudentOutput}
+                  onStudentOutputChange={handleStudentOutputChange}
                 />
               ) : selectedActivity.mode === 'listening' ? (
                 <ListeningModule
@@ -385,13 +493,14 @@ export const App: React.FC = () => {
                 <WritingModule
                   activity={selectedActivity}
                   updateHarnessStatus={setHarnessStatus}
-                  onStudentOutputChange={setStudentOutput}
+                  onStudentOutputChange={handleStudentOutputChange}
                 />
               )}
             </section>
           </>
         )}
 
+        {/* AI 6단계 코칭 안전망 인스펙터 */}
         {activeTab === 'inspector' && (
           <HarnessInspector
             status={harnessStatus}
@@ -405,6 +514,28 @@ export const App: React.FC = () => {
           />
         )}
 
+        {/* 학생 전용 개인 맞춤 학습 대시보드 */}
+        {activeTab === 'studentDashboard' && (
+          <StudentDashboard
+            user={currentUser || {
+              id: 'guest_student',
+              name: '학생(게스트)',
+              email: 'guest@student.school.kr',
+              avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+              role: 'student',
+              grade: 'G2',
+            }}
+            onSelectActivity={(actId) => {
+              const act = CURRICULUM_DATA.find((a) => a.id === actId);
+              if (act) {
+                handleSelectActivity(act);
+                setActiveTab('studio');
+              }
+            }}
+          />
+        )}
+
+        {/* 교사용 학생 관찰 기록 & 생활기록부 세특 관제 센터 */}
         {activeTab === 'teacher' && (
           <TeacherDashboard
             activity={selectedActivity}
@@ -412,6 +543,7 @@ export const App: React.FC = () => {
             attemptsCount={harnessStatus.loop.attempts}
             sensorScore={harnessStatus.sensor.currentScore}
             studentOutput={studentOutput}
+            user={currentUser || undefined}
           />
         )}
       </main>
@@ -420,10 +552,10 @@ export const App: React.FC = () => {
       <footer className="w-full border-t border-stone-200 bg-white py-6 px-4 sm:px-8 text-center text-xs text-slateText-muted">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <p>
-            <strong>Vibe English Harness Studio</strong> — 2022 개정 교육과정 및 수능 체계 연계 영어과 에이전틱 플랫폼
+            <strong>바이브 영어 학습 스튜디오</strong> — 2022 개정 교육과정 및 수능·모의고사 연계 자기주도 학습 플랫폼
           </p>
           <p className="text-stone-400">
-            기반 모델: Gemini / Claude / GPT + 6-Layer Educational Harness
+            학생의 생각을 키우는 6단계 AI 학습 안전망 (대필 방지 & 단계별 힌트 지원)
           </p>
         </div>
       </footer>

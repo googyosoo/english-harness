@@ -23,7 +23,7 @@ export const DashboardCards: React.FC<DashboardCardsProps> = ({
             <Sparkles className="w-5 h-5 text-honey-500" />
           </h2>
           <p className="text-sm text-slateText-muted mt-0.5">
-            학년별 수능·내신 연계 활동과 안전한 6겹 하네스 비계를 직접 경험해보세요.
+            학년별 수능·내신 연계 활동과 스스로 생각을 키워주는 6단계 AI 학습 도우미를 경험해보세요.
           </p>
         </div>
         <div className="hidden sm:flex items-center gap-2 text-xs text-slateText-muted">

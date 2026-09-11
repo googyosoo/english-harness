@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
-import { Mic, MicOff, Volume2, Sparkles, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Mic, MicOff, Volume2, Sparkles } from 'lucide-react';
+import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
 
 interface SpeakingModuleProps {
   activity: ActivityContent;
@@ -11,13 +12,21 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
   activity,
   updateHarnessStatus,
 }) => {
+  const savedState = loadStudentProgress().moduleDrafts[activity.id];
+
   const [isRecording, setIsRecording] = useState(false);
-  const [spokenTranscript, setSpokenTranscript] = useState('');
-  const [analyzed, setAnalyzed] = useState(false);
+  const [spokenTranscript, setSpokenTranscript] = useState(savedState?.text || '');
+  const [analyzed, setAnalyzed] = useState(Boolean(savedState?.text));
   const [wpm, setWpm] = useState<number>(0);
   const [currentFeedbackTier, setCurrentFeedbackTier] = useState<'basic' | 'natural' | 'academic'>('natural');
   const recognitionRef = useRef<any>(null);
   const startTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    const s = loadStudentProgress().moduleDrafts[activity.id];
+    setSpokenTranscript(s?.text || '');
+    setAnalyzed(Boolean(s?.text));
+  }, [activity.id]);
 
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -32,7 +41,21 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
         for (let i = 0; i < event.results.length; i++) {
           current += event.results[i][0].transcript + ' ';
         }
-        setSpokenTranscript(current.trim());
+        const text = current.trim();
+        setSpokenTranscript(text);
+
+        // 실시간 저장
+        const progress = loadStudentProgress();
+        const currentModule = progress.moduleDrafts[activity.id] || {};
+        saveStudentProgress({
+          moduleDrafts: {
+            ...progress.moduleDrafts,
+            [activity.id]: {
+              ...currentModule,
+              text,
+            }
+          }
+        });
       };
 
       recognition.onerror = () => {
@@ -45,7 +68,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
 
       recognitionRef.current = recognition;
     }
-  }, []);
+  }, [activity.id]);
 
   const handleToggleRecording = () => {
     if (isRecording) {
@@ -54,7 +77,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
       }
       setIsRecording(false);
 
-      // 발화 분석 센서 계산
+      // 발화 분석 계산
       const durationMin = Math.max(0.1, (Date.now() - startTimeRef.current) / 60000);
       const wordCount = spokenTranscript.trim().split(/\s+/).filter(Boolean).length;
       const calculatedWpm = Math.round(wordCount / durationMin);
@@ -67,19 +90,19 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
       updateHarnessStatus(prev => ({
         ...prev,
         sensor: {
-          name: '발화 유창성 및 WPM 센서',
+          name: '말하기 속도 및 유창성 점검',
           currentScore: Math.min(100, Math.round((calculatedWpm / targetWpm) * 100)),
           status: isGoodFluency ? 'passed' : 'warning',
-          feedback: `발화 속도: ${calculatedWpm} WPM (기준: ${targetWpm} WPM). ${wordCount}단어 구술 완료.`
+          feedback: `말하기 속도: 분당 ${calculatedWpm}단어 (기준: ${targetWpm}단어). 총 ${wordCount}개 단어 구술 완료.`
         },
         loop: {
           ...prev.loop,
           attempts: prev.loop.attempts + 1,
-          currentStep: '발화 피드백 수렴',
+          currentStep: '말하기 피드백 확인',
         },
         observability: {
           ...prev.observability,
-          neisObservationLog: `영어 구술 평가에서 ${calculatedWpm} WPM의 안정적인 발화 유창성을 발휘하며 논리적 의견을 제시함.`
+          neisObservationLog: `영어 구술 평가에서 분당 ${calculatedWpm}단어의 안정적인 발화 유창성을 발휘하며 논리적 의견을 제시함.`
         }
       }));
     } else {
@@ -98,7 +121,11 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
         setIsRecording(true);
         startTimeRef.current = Date.now();
         setTimeout(() => {
-          setSpokenTranscript(activity.sampleAnswerSteps?.basic || "We should reduce plastic because it's good for nature.");
+          const sample = activity.sampleAnswerSteps?.basic || "We should reduce plastic because it's good for nature.";
+          setSpokenTranscript(sample);
+          setIsRecording(false);
+          setAnalyzed(true);
+          setWpm(120);
         }, 1500);
       }
     }
@@ -126,7 +153,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
             <h3 className="text-lg font-bold text-slateText-title flex items-center gap-2">
               {activity.title}
               <span className="text-xs font-normal px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
-                실시간 음성 발화
+                실시간 음성 말하기
               </span>
             </h3>
             <p className="text-xs text-slateText-muted">{activity.subTitle}</p>
@@ -136,7 +163,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
 
       {/* 발화 프롬프트 */}
       <div className="bg-[#FDFBF7] p-5 rounded-xl border border-stone-200 mb-6">
-        <div className="text-xs font-bold text-stone-500 uppercase mb-1">🎯 Speaking Prompt</div>
+        <div className="text-xs font-bold text-stone-500 uppercase mb-1">🎯 말하기 주제 (Speaking Prompt)</div>
         <p className="text-base font-bold text-slateText-title mb-2">
           {activity.speakingPrompt}
         </p>
@@ -149,7 +176,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
       <div className="flex flex-col items-center justify-center p-6 bg-stone-50 rounded-xl border border-stone-200 mb-6">
         <button
           onClick={handleToggleRecording}
-          className={`w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-md ${
+          className={`w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-md cursor-pointer ${
             isRecording
               ? 'bg-rose-500 text-white animate-pulse ring-4 ring-rose-300'
               : 'bg-honey-400 hover:bg-honey-500 text-slateText-title'
@@ -162,7 +189,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
           {isRecording ? '듣고 있어요! 영어로 말씀하세요... (클릭하여 정지)' : '마이크 버튼을 누르고 말씀하세요'}
         </p>
         <p className="text-[11px] text-stone-400 mt-0.5">
-          (Web Speech API 실시간 음성인식 작동)
+          (음성을 실시간 텍스트로 자동 변환합니다)
         </p>
 
         {/* 실시간 STT 텍스트 프리뷰 */}
@@ -175,16 +202,16 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
         </div>
       </div>
 
-      {/* 발화 분석 센서 결과 */}
+      {/* 발화 분석 결과 */}
       {analyzed && (
         <div className="p-4 bg-purple-50/60 border border-purple-200 rounded-xl mb-6">
           <div className="flex items-center justify-between mb-2">
             <h4 className="font-bold text-xs text-purple-900 flex items-center gap-1.5">
               <Sparkles className="w-4 h-4 text-purple-600" />
-              하네스 발화 분석 센서 결과
+              말하기 분석 결과
             </h4>
             <span className="text-xs font-mono font-bold text-purple-700">
-              속도: {wpm} WPM
+              말하기 속도: 분당 {wpm}단어
             </span>
           </div>
 
@@ -192,24 +219,24 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
             총 {spokenTranscript.split(/\s+/).filter(Boolean).length}단어를 구술했습니다.
           </p>
 
-          {/* 3단계 스캐폴딩 (Basic -> Natural -> Academic) */}
+          {/* 3단계 표현 피드백 (기본 -> 자연스러움 -> 학술적) */}
           <div className="bg-white p-3.5 rounded-lg border border-purple-200/80">
             <div className="flex items-center justify-between mb-2 pb-2 border-b border-stone-100">
               <span className="text-xs font-bold text-slateText-title">
-                하네스 3단계 표현 레벨업 피드백:
+                단계별 추천 표현 (기본 → 자연스러움 → 학술적):
               </span>
               <div className="flex gap-1">
                 {(['basic', 'natural', 'academic'] as const).map((tier) => (
                   <button
                     key={tier}
                     onClick={() => setCurrentFeedbackTier(tier)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer ${
                       currentFeedbackTier === tier
                         ? 'bg-purple-600 text-white'
                         : 'bg-stone-100 text-stone-500 hover:bg-stone-200'
                     }`}
                   >
-                    {tier}
+                    {tier === 'basic' ? '기본' : tier === 'natural' ? '자연스러움' : '학술적'}
                   </button>
                 ))}
               </div>
@@ -221,7 +248,7 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
               </p>
               <button
                 onClick={() => playTTS(activity.sampleAnswerSteps?.[currentFeedbackTier] || '')}
-                className="p-1.5 bg-stone-100 hover:bg-honey-100 text-stone-600 hover:text-honey-700 rounded-md transition-colors"
+                className="p-1.5 bg-stone-100 hover:bg-honey-100 text-stone-600 hover:text-honey-700 rounded-md transition-colors cursor-pointer"
                 title="원어민 발음 듣기"
               >
                 <Volume2 className="w-4 h-4" />
