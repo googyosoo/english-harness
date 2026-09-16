@@ -302,8 +302,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </div>
             </>
           ) : (
-            <div className="p-16 bg-white rounded-2xl border border-stone-200 text-center text-xs text-stone-400">
-              학생을 선택해 주세요.
+            <div className="p-16 bg-white rounded-2xl border-2 border-dashed border-stone-200 text-center space-y-3">
+              <div className="w-12 h-12 mx-auto rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500">
+                <FileText className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-slateText-title">아직 제출된 학생 과업이 없습니다</h3>
+              <p className="text-xs text-stone-500 max-w-sm mx-auto leading-relaxed">
+                더미 데이터를 모두 배제하고 실제 데이터 파이프라인으로 전환되었습니다. 학생들이 <strong>[학습 스튜디오]</strong>에서 과업을 완료하고 제출하면 이곳에 실시간으로 학생별 생활기록부 세특과 에세이가 자동 생성됩니다.
+              </p>
             </div>
           )}
         </div>

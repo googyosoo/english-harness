@@ -1,7 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ExamBankItem, INITIAL_EXAM_BANK_SAMPLES } from '../data/examBank';
-import { ActivityContent } from '../types/harness';
-import { Search, Filter, BookOpen, Headphones, PenTool, Sparkles, X, Check, ArrowRight, Layers, Loader2 } from 'lucide-react';
+import { 
+  Search, Filter, BookOpen, Headphones, PenTool, Sparkles, 
+  X, Check, ArrowRight, Layers, Loader2, ChevronDown, ChevronUp, 
+  Eye, FileText, CheckCircle2 
+} from 'lucide-react';
 
 interface ExamBankModalProps {
   isOpen: boolean;
@@ -29,6 +32,9 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // 선택된 문항만 보기 토글
   const [showOnlySelected, setShowOnlySelected] = useState(false);
+
+  // 원문 전체 펼쳐보기(아코디언/확장) 상태 관리 (펼쳐진 문항 ID Set)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   // 전체 기출 데이터 비동기 로드 (/data/exam_bank.json)
   useEffect(() => {
@@ -67,6 +73,20 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
     });
   };
 
+  // 원문 펼치기/접기 토글 함수
+  const toggleExpand = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   // 전체 선택 해제
   const clearSelection = () => {
     setSelectedIds(new Set());
@@ -78,23 +98,26 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
     return items.filter(item => selectedIds.has(item.id));
   }, [items, selectedIds]);
 
-  // 필터링된 기출 목록
+  // 키워드 및 필터링 검색
   const filtered = useMemo(() => {
     return items.filter(item => {
       if (showOnlySelected && !selectedIds.has(item.id)) return false;
       if (selectedGrade !== '전체' && item.grade !== selectedGrade) return false;
       if (selectedYear !== '전체' && item.year !== selectedYear) return false;
       if (selectedCategory !== '전체' && item.category !== selectedCategory) return false;
+      
+      // 키워드 검색: 제목, 대본, 지문, 문항 유형, 어휘 목록 전체 매칭
       if (searchWord.trim()) {
         const q = searchWord.toLowerCase();
-        const text = `${item.title} ${item.script || ''} ${item.passage || ''} ${item.type}`.toLowerCase();
-        return text.includes(q);
+        const wordsText = item.words ? item.words.map(w => `${w.word} ${w.meaning}`).join(' ') : '';
+        const fullContent = `${item.title} ${item.script || ''} ${item.passage || ''} ${item.type} ${wordsText}`.toLowerCase();
+        return fullContent.includes(q);
       }
       return true;
     });
   }, [items, selectedGrade, selectedYear, selectedCategory, searchWord, showOnlySelected, selectedIds]);
 
-  // 복수 문항 일괄 로드 실행
+  // 복수 문항 일괄 스튜디오 로드 실행
   const handleLoadSelectedBatch = () => {
     if (selectedItemsList.length === 0) return;
     if (onLoadExamItems) {
@@ -108,8 +131,8 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl border border-stone-200 flex flex-col max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="w-full max-w-5xl bg-white rounded-3xl shadow-2xl border border-stone-200 flex flex-col max-h-[92vh] overflow-hidden">
         
         {/* 모달 상단 헤더 */}
         <div className="p-5 sm:p-6 bg-[#FDFBF7] border-b border-stone-200 flex items-center justify-between">
@@ -118,34 +141,33 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
               <span className="w-8 h-8 rounded-xl bg-honey-400 text-slateText-title flex items-center justify-center font-bold text-sm shadow-xs">
                 📚
               </span>
-              <h2 className="text-xl font-bold text-slateText-title font-sans">
-                2020~2026 기출 문제은행 탐색기
-              </h2>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-honey-100 text-honey-800 border border-honey-200 flex items-center gap-1.5">
-                {isLoading && <Loader2 className="w-3 h-3 animate-spin text-honey-600" />}
-                총 {items.length}문항 연동됨
+              <h3 className="text-xl font-extrabold text-slateText-title font-sans">
+                2020~2026 기출문항 탐색기 & 지문 뷰어
+              </h3>
+              <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                {isLoading ? '문항 데이터 불러오는 중...' : `총 ${items.length.toLocaleString()}문항 보유`}
               </span>
               {selectedIds.size > 0 && (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-600 text-white shadow-xs">
                   {selectedIds.size}개 문항 선택됨
                 </span>
               )}
             </div>
             <p className="text-xs text-slateText-muted">
-              체크박스로 복수의 문항을 선택하여 <strong>다중 지문 비교·대조 작문(Synthesis)</strong> 및 통합 연계 학습을 구성하거나, 개별 문항을 즉시 로드할 수 있습니다.
+              키워드로 지문을 실시간 검색하고, <strong>카드를 클릭하여 지문 전체 원문을 확인</strong>한 뒤 원하는 문항을 스튜디오로 추가할 수 있습니다.
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors"
+            className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* 필터 바 (태그 칩 & 다중 선택 필터) */}
-        <div className="p-4 bg-stone-50/80 border-b border-stone-200 space-y-3">
-          {/* 1열: 검색창 및 학년 필터 */}
+        {/* 필터 바 (키워드 검색창, 학년, 연도, 영역 필터) */}
+        <div className="p-4 bg-stone-50/90 border-b border-stone-200 space-y-3">
+          {/* 1열: 키워드 검색창 및 학년 필터 */}
           <div className="flex flex-col sm:flex-row items-center gap-3">
             <div className="relative flex-1 w-full">
               <Search className="w-4 h-4 text-stone-400 absolute left-3 top-2.5" />
@@ -153,9 +175,17 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                 type="text"
                 value={searchWord}
                 onChange={(e) => setSearchWord(e.target.value)}
-                placeholder="지문 내용, 키워드, 유형 등으로 실시간 검색..."
+                placeholder="지문 속 단어, 핵심 주제, 키워드(예: artificial intelligence, ethical, sleep 등) 검색..."
                 className="w-full pl-9 pr-4 py-2 text-xs bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-honey-500 shadow-inner"
               />
+              {searchWord && (
+                <button
+                  onClick={() => setSearchWord('')}
+                  className="absolute right-3 top-2.5 text-stone-400 hover:text-stone-600 text-xs cursor-pointer"
+                >
+                  지우기
+                </button>
+              )}
             </div>
 
             {/* 학년 칩 */}
@@ -164,7 +194,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                 <button
                   key={g}
                   onClick={() => setSelectedGrade(g)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     selectedGrade === g
                       ? 'bg-honey-400 text-slateText-title shadow-xs'
                       : 'bg-white text-stone-600 hover:bg-stone-100 border border-stone-200'
@@ -184,7 +214,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                 <button
                   key={y}
                   onClick={() => setSelectedYear(y)}
-                  className={`px-2 py-0.5 rounded-lg transition-all ${
+                  className={`px-2 py-0.5 rounded-lg transition-all cursor-pointer ${
                     selectedYear === y
                       ? 'bg-slateText-title text-white font-bold shadow-xs'
                       : 'bg-white text-stone-600 hover:bg-stone-100 border border-stone-200'
@@ -205,7 +235,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                 <button
                   key={c.id}
                   onClick={() => setSelectedCategory(c.id as any)}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                     selectedCategory === c.id
                       ? 'bg-indigo-600 text-white font-bold'
                       : 'bg-white text-stone-600 hover:bg-stone-100 border border-stone-200'
@@ -219,7 +249,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
               {selectedIds.size > 0 && (
                 <button
                   onClick={() => setShowOnlySelected(!showOnlySelected)}
-                  className={`ml-2 px-3 py-1 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                  className={`ml-2 px-3 py-1 rounded-lg font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                     showOnlySelected
                       ? 'bg-indigo-600 text-white shadow-xs'
                       : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
@@ -242,11 +272,11 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                 <span className="font-semibold text-slateText-title">
                   {selectedIds.size === 1 
                     ? '1개 문항이 선택되었습니다.' 
-                    : `${selectedIds.size}개 문항이 복수 선택되었습니다. (다중 텍스트 비교 대조 & Synthesis 작문 지원)`}
+                    : `${selectedIds.size}개 문항이 선택되었습니다. (다중 텍스트 비교 대조 & Synthesis 작문 지원)`}
                 </span>
                 <button
                   onClick={clearSelection}
-                  className="text-stone-400 hover:text-stone-700 underline text-[11px] ml-1"
+                  className="text-stone-400 hover:text-stone-700 underline text-[11px] ml-1 cursor-pointer"
                 >
                   선택 초기화
                 </button>
@@ -254,10 +284,10 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
 
               <button
                 onClick={handleLoadSelectedBatch}
-                className="w-full sm:w-auto px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+                className="w-full sm:w-auto px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5 text-honey-300" />
-                <span>선택한 {selectedIds.size}개 문항으로 스튜디오 로드</span>
+                <span>선택한 {selectedIds.size}개 문항 스튜디오로 넣기</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -265,94 +295,152 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
         </div>
 
         {/* 문항 목록 리스트 */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 divide-y divide-stone-100 space-y-3">
-          {filtered.length === 0 ? (
-            <div className="py-16 text-center text-stone-400 text-xs">
-              선택하신 조건에 해당하는 기출 문항이 없습니다.
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
+          {isLoading ? (
+            <div className="py-20 text-center space-y-3">
+              <Loader2 className="w-8 h-8 text-honey-500 animate-spin mx-auto" />
+              <p className="text-xs text-stone-500">기출문항 데이터베이스를 탐색하는 중입니다...</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="py-20 text-center space-y-2">
+              <p className="text-sm font-bold text-stone-600">검색 조건에 일치하는 문항이 없습니다.</p>
+              <p className="text-xs text-stone-400">다른 키워드로 검색하거나 필터를 초기화해 보세요.</p>
             </div>
           ) : (
             filtered.map((item) => {
               const isSelected = selectedIds.has(item.id);
+              const isExpanded = expandedIds.has(item.id);
+              const rawText = item.script || item.passage || '';
+
               return (
                 <div
                   key={item.id}
-                  onClick={() => toggleSelect(item.id)}
-                  className={`pt-3 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl transition-all border cursor-pointer ${
+                  onClick={() => toggleExpand(item.id)}
+                  className={`p-4 rounded-2xl transition-all border cursor-pointer ${
                     isSelected
                       ? 'bg-indigo-50/40 border-indigo-300 shadow-xs'
-                      : 'hover:bg-honey-50/30 border-stone-100 hover:border-honey-200'
+                      : isExpanded
+                      ? 'bg-amber-50/20 border-honey-300 shadow-sm'
+                      : 'hover:bg-stone-50/80 border-stone-200'
                   }`}
                 >
-                  <div className="flex items-start gap-3 flex-1">
-                    {/* 체크박스 */}
-                    <div 
-                      className="pt-0.5"
-                      onClick={(e) => toggleSelect(item.id, e)}
-                    >
-                      <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all ${
-                        isSelected 
-                          ? 'bg-indigo-600 border-indigo-600 text-white' 
-                          : 'bg-white border-stone-300 hover:border-indigo-400'
-                      }`}>
-                        {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                  {/* 상단 라인: 체크박스 + 메타 뱃지 + 액션 버튼 */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3 flex-1">
+                      {/* 선택 체크박스 */}
+                      <div 
+                        className="pt-1"
+                        onClick={(e) => toggleSelect(item.id, e)}
+                      >
+                        <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all cursor-pointer ${
+                          isSelected 
+                            ? 'bg-indigo-600 border-indigo-600 text-white' 
+                            : 'bg-white border-stone-300 hover:border-indigo-400'
+                        }`}>
+                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                        </div>
+                      </div>
+
+                      {/* 정보 영역 */}
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                            item.grade === '고1' 
+                              ? 'bg-blue-50 text-blue-700 border border-blue-200' 
+                              : item.grade === '고2'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-purple-50 text-purple-700 border border-purple-200'
+                          }`}>
+                            {item.grade}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-stone-100 text-stone-700">
+                            {item.year}년 {item.exam} {item.qNumber}번
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                            {item.type}
+                          </span>
+                          <span className="text-[10px] text-stone-400 font-mono">
+                            {item.lexile} | {item.cefrLevel}
+                          </span>
+                        </div>
+
+                        <h4 className="font-bold text-sm text-slateText-title flex items-center gap-2">
+                          <span>{item.title}</span>
+                          <span className="text-xs text-honey-600 font-normal flex items-center gap-0.5">
+                            {isExpanded ? (
+                              <span className="flex items-center text-stone-400 text-[11px]">
+                                접기 <ChevronUp className="w-3.5 h-3.5" />
+                              </span>
+                            ) : (
+                              <span className="flex items-center text-honey-600 text-[11px] font-medium">
+                                원문 전체 보기 <ChevronDown className="w-3.5 h-3.5" />
+                              </span>
+                            )}
+                          </span>
+                        </h4>
                       </div>
                     </div>
 
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                          item.grade === '고1' 
-                            ? 'bg-blue-50 text-blue-700 border border-blue-200' 
-                            : item.grade === '고2'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-purple-50 text-purple-700 border border-purple-200'
-                        }`}>
-                          {item.grade}
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-stone-100 text-stone-700">
-                          {item.year}년 {item.exam} {item.qNumber}번
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                          {item.type}
-                        </span>
-                        <span className="text-[10px] text-stone-400 font-mono">
-                          {item.lexile} | {item.cefrLevel}
-                        </span>
-                      </div>
-
-                      <h4 className="font-bold text-sm text-slateText-title mb-1">
-                        {item.title}
-                      </h4>
-
-                      <p className="text-xs text-slateText-body/80 line-clamp-2 leading-relaxed font-serif">
-                        {item.script || item.passage}
-                      </p>
-
-                      {/* 어휘 태그 */}
-                      {item.words && item.words.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {item.words.slice(0, 4).map((w, wIdx) => (
-                            <span key={wIdx} className="px-1.5 py-0.5 bg-white border border-stone-200 rounded text-[10px] text-stone-600">
-                              {w.word}: {w.meaning}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                    {/* 우측 버튼: 스튜디오 추가 */}
+                    <div className="flex items-center gap-2 shrink-0 sm:self-center">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onLoadExamItem(item);
+                          onClose();
+                        }}
+                        className="px-3.5 py-2 bg-honey-400 hover:bg-honey-500 text-slateText-title font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>스튜디오에 넣기</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="sm:text-right flex-shrink-0 flex items-center gap-2">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onLoadExamItem(item);
-                        onClose();
-                      }}
-                      className="w-full sm:w-auto px-3.5 py-2 bg-honey-400 hover:bg-honey-500 text-slateText-title font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5"
-                    >
-                      <span>이 문항만 시작</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
+                  {/* 지문 내용: 접혀있을 때는 2줄 요약, 펼쳐졌을 때는 원문 전체 표시 */}
+                  <div className="mt-2.5 pl-8">
+                    {isExpanded ? (
+                      <div className="p-4 rounded-xl bg-white border border-stone-200 shadow-inner space-y-3 animate-in fade-in duration-150">
+                        <div className="flex items-center justify-between pb-2 border-b border-stone-100">
+                          <span className="text-xs font-bold text-slateText-title flex items-center gap-1.5">
+                            <FileText className="w-4 h-4 text-honey-600" />
+                            {item.category === 'listening' ? '듣기 원어민 대본 전체 원문' : '독해 지문 전체 원문'}
+                          </span>
+                          <span className="text-[11px] text-stone-400 font-mono">
+                            총 {rawText.split(/\s+/).filter(Boolean).length}단어
+                          </span>
+                        </div>
+                        
+                        <div className="text-xs text-slateText-body leading-relaxed font-serif whitespace-pre-line select-text">
+                          {rawText}
+                        </div>
+
+                        {/* 단어장이 있을 경우 단어 목록 표시 */}
+                        {item.words && item.words.length > 0 && (
+                          <div className="pt-2 border-t border-stone-100">
+                            <span className="text-[11px] font-bold text-stone-500 mb-1.5 block">
+                              핵심 어휘 목록
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {item.words.map((w, wIdx) => (
+                                <span
+                                  key={wIdx}
+                                  className="px-2 py-0.5 bg-stone-50 border border-stone-200 rounded text-[11px] text-stone-700 font-mono"
+                                >
+                                  <strong>{w.word}</strong>: {w.meaning}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slateText-body/80 line-clamp-2 leading-relaxed font-serif">
+                        {rawText}
+                      </p>
+                    )}
                   </div>
                 </div>
               );
@@ -363,7 +451,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
         {/* 하단 푸터 바 */}
         <div className="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-between text-xs text-slateText-muted">
           <div className="flex items-center gap-2">
-            <span>현재 결과: <strong>{filtered.length}</strong>개 문항</span>
+            <span>검색 결과: <strong>{filtered.length}</strong>개 문항</span>
             {selectedIds.size > 0 && (
               <span className="text-indigo-600 font-bold">({selectedIds.size}개 선택 중)</span>
             )}
@@ -372,14 +460,14 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
             {selectedIds.size > 0 && (
               <button
                 onClick={handleLoadSelectedBatch}
-                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-xs transition-colors"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xs transition-colors cursor-pointer"
               >
-                선택한 {selectedIds.size}개 일괄 로드
+                선택한 {selectedIds.size}개 스튜디오로 넣기
               </button>
             )}
             <button
               onClick={onClose}
-              className="px-4 py-1.5 bg-white hover:bg-stone-100 border border-stone-200 rounded-lg font-medium text-stone-700"
+              className="px-4 py-2 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl font-medium text-stone-700 cursor-pointer"
             >
               닫기
             </button>
@@ -389,4 +477,3 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
     </div>
   );
 };
-

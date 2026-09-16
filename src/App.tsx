@@ -18,6 +18,11 @@ import { IntegratedModule } from './components/modules/IntegratedModule';
 import { Sparkles } from 'lucide-react';
 import { loadStudentProgress, saveStudentProgress, clearStudentProgress } from './utils/storage';
 import { loadCurrentUser, saveCurrentUser, logoutUser, saveSubmission } from './utils/authStorage';
+import { 
+  loadActivities, saveActivities, deleteActivityById, 
+  deleteActivitiesByIds, clearAllActivities, resetToDefaultActivities,
+  addActivitiesToStudio 
+} from './utils/activityStorage';
 import { runFullSmartSensorInspection } from './utils/sensorEngine';
 
 export const App: React.FC = () => {
@@ -31,10 +36,13 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isExamBankOpen, setIsExamBankOpen] = useState(false);
 
+  // 스튜디오 문항 목록 동적 관리 (삭제 및 복구 지원)
+  const [activities, setActivities] = useState<ActivityContent[]>(() => loadActivities());
+
   // 로컬 저장소에서 이전 학습 기록 복원
   const initialSaved = useRef(loadStudentProgress()).current;
   const initialActivity = 
-    CURRICULUM_DATA.find((a) => a.id === initialSaved.selectedActivityId) || CURRICULUM_DATA[0];
+    activities.find((a) => a.id === initialSaved.selectedActivityId) || activities[0] || CURRICULUM_DATA[0];
 
   // 현재 선택된 과업
   const [selectedActivity, setSelectedActivity] = useState<ActivityContent>(initialActivity);
@@ -267,6 +275,9 @@ export const App: React.FC = () => {
         }]
       };
 
+      // 스튜디오 목록에 실제로 영구 추가
+      const updatedActivities = addActivitiesToStudio([newActivity]);
+      setActivities(updatedActivities);
       setSelectedActivity(newActivity);
       setActiveTab('studio');
 
@@ -343,6 +354,9 @@ export const App: React.FC = () => {
       }
     };
 
+    // 스튜디오 목록에 복수 문항 연계 과업 영구 추가
+    const updatedActivities = addActivitiesToStudio([combinedActivity]);
+    setActivities(updatedActivities);
     setSelectedActivity(combinedActivity);
     setActiveTab('studio');
 
@@ -373,8 +387,42 @@ export const App: React.FC = () => {
     }));
   };
 
-  // 과업 필터링
-  const filteredActivities = CURRICULUM_DATA.filter((activity) => {
+  // 문항 삭제/복구 핸들러
+  const handleDeleteActivity = (activityId: string) => {
+    const updated = deleteActivityById(activityId);
+    setActivities(updated);
+    if (selectedActivity.id === activityId) {
+      if (updated.length > 0) {
+        handleSelectActivity(updated[0]);
+      }
+    }
+  };
+
+  const handleDeleteMultipleActivities = (activityIds: string[]) => {
+    const updated = deleteActivitiesByIds(activityIds);
+    setActivities(updated);
+    if (activityIds.includes(selectedActivity.id)) {
+      if (updated.length > 0) {
+        handleSelectActivity(updated[0]);
+      }
+    }
+  };
+
+  const handleClearAllActivities = () => {
+    const updated = clearAllActivities();
+    setActivities(updated);
+  };
+
+  const handleResetDefaultActivities = () => {
+    const updated = resetToDefaultActivities();
+    setActivities(updated);
+    if (updated.length > 0) {
+      handleSelectActivity(updated[0]);
+    }
+  };
+
+  // 과업 필터링 (동적 activities 기준)
+  const filteredActivities = activities.filter((activity) => {
     const matchesGrade = selectedGrade === 'ALL' || activity.grade === selectedGrade;
     const matchesMode =
       selectedMode === 'all'
@@ -435,11 +483,15 @@ export const App: React.FC = () => {
       <main className="flex-1 pb-16">
         {activeTab === 'studio' && (
           <>
-            {/* 상단 큐레이션 과업 카드 그리드 (Pills 필터와 실시간 연동) */}
+            {/* 상단 큐레이션 과업 카드 그리드 (Pills 필터와 실시간 연동 및 삭제 기능 제공) */}
             <DashboardCards
               activities={filteredActivities}
               selectedActivityId={selectedActivity.id}
               onSelectActivity={handleSelectActivity}
+              onDeleteActivity={handleDeleteActivity}
+              onDeleteMultipleActivities={handleDeleteMultipleActivities}
+              onClearAllActivities={handleClearAllActivities}
+              onResetDefaultActivities={handleResetDefaultActivities}
             />
 
             {/* 현재 선택된 과업의 인터랙티브 스튜디오 워크스페이스 */}
