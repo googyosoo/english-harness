@@ -30,4 +30,6 @@ export interface StudentSubmission {
   studentOutput: string;
   notes?: string;
   sensorReport: SmartSensorReportData;
+  isCorrect?: boolean;
+  selectedOptionIndex?: number;
 }

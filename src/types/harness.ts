@@ -80,6 +80,12 @@ export interface ActivityContent {
   audioScript?: string;
   audioDuration?: string;
   dictationTarget?: string[];
+  listeningQuiz?: {
+    question: string;
+    options: string[];
+    answerIndex: number;
+    explanation: string;
+  };
   
   // 읽기 관련
   readingPassage?: string;
@@ -103,6 +109,21 @@ export interface ActivityContent {
   writingPrompt?: string;
   minWords?: number;
   targetKeywords?: string[];
+  writingMissions?: {
+    blankFill?: {
+      sentence: string;
+      answer: string;
+      hint: string;
+    };
+    topicStatement?: {
+      guidePrompt: string;
+      sampleAnswer: string;
+    };
+    summaryWriting?: {
+      guidePrompt: string;
+      sampleAnswer: string;
+    };
+  };
 
   // 연계(Handoff) 관련
   handoffInstruction?: {

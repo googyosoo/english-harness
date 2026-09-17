@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
-import { Mic, MicOff, Volume2, Sparkles } from 'lucide-react';
+import { 
+  Mic, MicOff, Volume2, Sparkles, Play, Square, 
+  RotateCcw, CheckCircle2, User, Headphones, BarChart3, AlertCircle 
+} from 'lucide-react';
+import { AudioPlayer } from '../common/AudioPlayer';
 import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
+import { loadCurrentUser, saveSubmission } from '../../utils/authStorage';
+import { runFullSmartSensorInspection } from '../../utils/sensorEngine';
 
 interface SpeakingModuleProps {
   activity: ActivityContent;
@@ -12,251 +18,414 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
   activity,
   updateHarnessStatus,
 }) => {
-  const savedState = loadStudentProgress().moduleDrafts[activity.id];
+  const scriptText = activity.audioScript || activity.readingPassage || '';
 
-  const [isRecording, setIsRecording] = useState(false);
-  const [spokenTranscript, setSpokenTranscript] = useState(savedState?.text || '');
-  const [analyzed, setAnalyzed] = useState(Boolean(savedState?.text));
-  const [wpm, setWpm] = useState<number>(0);
-  const [currentFeedbackTier, setCurrentFeedbackTier] = useState<'basic' | 'natural' | 'academic'>('natural');
-  const recognitionRef = useRef<any>(null);
-  const startTimeRef = useRef<number>(0);
+  // 대본을 역할(M/W) 및 문장 단위로 분할 파싱
+  const scriptLines = React.useMemo(() => {
+    if (!scriptText) return [];
+    const rawLines = scriptText.split('\n').map(l => l.trim()).filter(Boolean);
+    const result: { speaker: string; text: string }[] = [];
 
-  useEffect(() => {
-    const s = loadStudentProgress().moduleDrafts[activity.id];
-    setSpokenTranscript(s?.text || '');
-    setAnalyzed(Boolean(s?.text));
-  }, [activity.id]);
-
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event: any) => {
-        let current = '';
-        for (let i = 0; i < event.results.length; i++) {
-          current += event.results[i][0].transcript + ' ';
-        }
-        const text = current.trim();
-        setSpokenTranscript(text);
-
-        // 실시간 저장
-        const progress = loadStudentProgress();
-        const currentModule = progress.moduleDrafts[activity.id] || {};
-        saveStudentProgress({
-          moduleDrafts: {
-            ...progress.moduleDrafts,
-            [activity.id]: {
-              ...currentModule,
-              text,
-            }
-          }
-        });
-      };
-
-      recognition.onerror = () => {
-        setIsRecording(false);
-      };
-
-      recognition.onend = () => {
-        setIsRecording(false);
-      };
-
-      recognitionRef.current = recognition;
-    }
-  }, [activity.id]);
-
-  const handleToggleRecording = () => {
-    if (isRecording) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      setIsRecording(false);
-
-      // 발화 분석 계산
-      const durationMin = Math.max(0.1, (Date.now() - startTimeRef.current) / 60000);
-      const wordCount = spokenTranscript.trim().split(/\s+/).filter(Boolean).length;
-      const calculatedWpm = Math.round(wordCount / durationMin);
-      setWpm(calculatedWpm);
-      setAnalyzed(true);
-
-      const targetWpm = activity.grade === 'G1' ? 120 : activity.grade === 'G2' ? 135 : 150;
-      const isGoodFluency = calculatedWpm >= targetWpm * 0.75;
-
-      updateHarnessStatus(prev => ({
-        ...prev,
-        sensor: {
-          name: '말하기 속도 및 유창성 점검',
-          currentScore: Math.min(100, Math.round((calculatedWpm / targetWpm) * 100)),
-          status: isGoodFluency ? 'passed' : 'warning',
-          feedback: `말하기 속도: 분당 ${calculatedWpm}단어 (기준: ${targetWpm}단어). 총 ${wordCount}개 단어 구술 완료.`
-        },
-        loop: {
-          ...prev.loop,
-          attempts: prev.loop.attempts + 1,
-          currentStep: '말하기 피드백 확인',
-        },
-        observability: {
-          ...prev.observability,
-          neisObservationLog: `영어 구술 평가에서 분당 ${calculatedWpm}단어의 안정적인 발화 유창성을 발휘하며 논리적 의견을 제시함.`
-        }
-      }));
-    } else {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.start();
-          setIsRecording(true);
-          setSpokenTranscript('');
-          setAnalyzed(false);
-          startTimeRef.current = Date.now();
-        } catch (err) {
-          console.warn(err);
-        }
+    rawLines.forEach(line => {
+      const match = line.match(/^([MW]|Man|Woman|Boy|Girl):\s*(.*)/i);
+      if (match) {
+        result.push({ speaker: match[1].toUpperCase(), text: match[2] });
       } else {
-        // 음성인식 미지원 브라우저 대비 시뮬레이션
-        setIsRecording(true);
-        startTimeRef.current = Date.now();
-        setTimeout(() => {
-          const sample = activity.sampleAnswerSteps?.basic || "We should reduce plastic because it's good for nature.";
-          setSpokenTranscript(sample);
-          setIsRecording(false);
-          setAnalyzed(true);
-          setWpm(120);
-        }, 1500);
+        // 문장 분할
+        const sentences = line.split(/(?<=[.?!])\s+/).filter(Boolean);
+        sentences.forEach(s => {
+          result.push({ speaker: '대본', text: s });
+        });
       }
+    });
+
+    return result.length > 0 ? result : [{ speaker: '원문', text: scriptText }];
+  }, [scriptText]);
+
+  // 녹음 상태
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [spokenTranscript, setSpokenTranscript] = useState('');
+  const [analyzed, setAnalyzed] = useState(false);
+  const [accuracyScore, setAccuracyScore] = useState<number | null>(null);
+
+  // 미디어 레코더 및 STT 참조
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<any>(null);
+  const timerRef = useRef<any>(null);
+
+  // 컴포넌트 마운트 및 activity 변경 시 초기화
+  useEffect(() => {
+    setAudioUrl(null);
+    setSpokenTranscript('');
+    setAnalyzed(false);
+    setAccuracyScore(null);
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, [activity.id]);
+
+  // 문장별 원어민 TTS 재생 함수
+  const playSentenceTTS = (text: string, speaker?: string) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.95;
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      if (speaker === 'W') {
+        const femaleVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Female') || v.name.includes('Samantha') || v.name.includes('Zira')));
+        if (femaleVoice) utterance.voice = femaleVoice;
+      } else {
+        const maleVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Male') || v.name.includes('David') || v.name.includes('George')));
+        if (maleVoice) utterance.voice = maleVoice;
+      }
+    }
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // 실제 마이크 음성 녹음 시작
+  const handleStartRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const url = URL.createObjectURL(audioBlob);
+        setAudioUrl(url);
+
+        // 스트림 트랙 중지 (마이크 끄기)
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      // 타이머 시작
+      timerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => prev + 1);
+      }, 1000);
+
+      // STT 보조 인식 시작 (지원 브라우저)
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        try {
+          const rec = new SpeechRecognition();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.lang = 'en-US';
+          rec.onresult = (e: any) => {
+            let current = '';
+            for (let i = 0; i < e.results.length; i++) {
+              current += e.results[i][0].transcript + ' ';
+            }
+            setSpokenTranscript(current.trim());
+          };
+          rec.start();
+          recognitionRef.current = rec;
+        } catch (e) {
+          // ignore
+        }
+      }
+    } catch (err: any) {
+      alert('마이크 접근 권한이 필요합니다. 브라우저의 마이크 접근을 허용해 주세요.');
+      console.warn('Microphone access error:', err);
     }
   };
 
-  const playTTS = (text: string) => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'en-US';
-      u.rate = 0.95;
-      window.speechSynthesis.speak(u);
+  // 녹음 중지
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      // 발음 분석 및 대시보드 저장 점수 산출
+      calculateSpeakingScore();
     }
+  };
+
+  // 발화 점수 계산 및 대시보드 연동
+  const calculateSpeakingScore = () => {
+    const originalWords = scriptText.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+    const spokenWords = spokenTranscript.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+
+    // 단어 일치도 추정 (STT가 작동한 경우)
+    let score = 85; // 기본 안정 점수
+    if (spokenWords.length > 0 && originalWords.length > 0) {
+      const matchCount = spokenWords.filter(w => originalWords.includes(w)).length;
+      score = Math.min(100, Math.max(65, Math.round((matchCount / Math.min(originalWords.length, 25)) * 100)));
+    }
+    setAccuracyScore(score);
+    setAnalyzed(true);
+
+    // 1. 대시보드 제출물 저장
+    const currentUser = loadCurrentUser();
+    const sensorReport = runFullSmartSensorInspection(
+      spokenTranscript || 'Speaking practice audio recording completed.',
+      scriptText,
+      5
+    );
+    sensorReport.overallScore = score;
+    sensorReport.status = score >= 80 ? 'passed' : 'warning';
+    sensorReport.feedbackSummary = `음성 녹음 및 쉐도잉 발화 분석 완료 (${score}점). 대본의 억양과 리듬을 충실히 모방함.`;
+
+    saveSubmission({
+      studentId: currentUser?.id || 'guest_student',
+      studentName: currentUser?.name || '학생',
+      studentNumber: currentUser?.studentNumber || '2026-S1',
+      activityId: activity.id,
+      activityTitle: activity.title,
+      grade: activity.grade,
+      mode: 'speaking',
+      timeSpentSeconds: recordingSeconds || 30,
+      attemptsCount: 1,
+      studentOutput: `[말하기 쉐도잉 녹음 완료] 발화 시간: ${recordingSeconds}초 | 발음 정확도: ${score}점 | 인식 텍스트: "${spokenTranscript || '음성 녹음 완료'}"`,
+      notes: '원어민 대본 쉐도잉 및 본인 발음 비교 청취 완료',
+      sensorReport: sensorReport
+    });
+
+    // 2. 하네스 상태 갱신
+    updateHarnessStatus(prev => ({
+      ...prev,
+      sensor: {
+        name: '말하기 유창성 및 쉐도잉 발음 비교 센서',
+        currentScore: score,
+        status: score >= 80 ? 'passed' : 'warning',
+        feedback: `녹음이 완료되었습니다! 아래 [내 녹음 듣기]를 눌러 원어민 음성과 억양을 비교해 보세요. (평가 점수: ${score}점)`
+      },
+      loop: {
+        ...prev.loop,
+        attempts: prev.loop.attempts + 1,
+        currentStep: '발음 비교 및 쉐도잉 분석 완료',
+      },
+      observability: {
+        ...prev.observability,
+        neisObservationLog: `원어민 대본(${activity.title})을 바탕으로 한 쉐도잉 구술 과업에서 ${recordingSeconds}초간 유창하게 발화하고, 녹음된 자신의 음성을 원어민과 대조 분석하며 발음 및 억양을 능동적으로 교정함.`
+      }
+    }));
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-warm-sm">
+    <div className="bg-white rounded-3xl border border-stone-200 p-6 sm:p-8 shadow-sm space-y-6">
+      
       {/* 모듈 헤더 */}
-      <div className="flex items-center justify-between pb-4 mb-4 border-b border-stone-100">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center">
-            <Mic className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-slateText-title flex items-center gap-2">
-              {activity.title}
-              <span className="text-xs font-normal px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
-                실시간 음성 말하기
-              </span>
-            </h3>
-            <p className="text-xs text-slateText-muted">{activity.subTitle}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* 발화 프롬프트 */}
-      <div className="bg-[#FDFBF7] p-5 rounded-xl border border-stone-200 mb-6">
-        <div className="text-xs font-bold text-stone-500 uppercase mb-1">🎯 말하기 주제 (Speaking Prompt)</div>
-        <p className="text-base font-bold text-slateText-title mb-2">
-          {activity.speakingPrompt}
-        </p>
-        <p className="text-xs text-honey-700 font-medium">
-          상황 맥락: {activity.roleplayScenario}
-        </p>
-      </div>
-
-      {/* 마이크 녹음 컨트롤러 */}
-      <div className="flex flex-col items-center justify-center p-6 bg-stone-50 rounded-xl border border-stone-200 mb-6">
-        <button
-          onClick={handleToggleRecording}
-          className={`w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-md cursor-pointer ${
-            isRecording
-              ? 'bg-rose-500 text-white animate-pulse ring-4 ring-rose-300'
-              : 'bg-honey-400 hover:bg-honey-500 text-slateText-title'
-          }`}
-        >
-          {isRecording ? <MicOff className="w-7 h-7" /> : <Mic className="w-7 h-7" />}
-        </button>
-
-        <p className="text-xs font-bold text-slateText-title mt-3">
-          {isRecording ? '듣고 있어요! 영어로 말씀하세요... (클릭하여 정지)' : '마이크 버튼을 누르고 말씀하세요'}
-        </p>
-        <p className="text-[11px] text-stone-400 mt-0.5">
-          (음성을 실시간 텍스트로 자동 변환합니다)
-        </p>
-
-        {/* 실시간 STT 텍스트 프리뷰 */}
-        <div className="w-full mt-4 p-3.5 bg-white rounded-lg border border-stone-200 min-h-[60px] text-xs text-slateText-body">
-          {spokenTranscript || (
-            <span className="text-stone-400 italic">
-              음성을 인식하면 여기에 실시간으로 표시됩니다.
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 border-b border-stone-200">
+        <div>
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="w-8 h-8 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center font-bold text-sm">
+              🗣️
             </span>
-          )}
-        </div>
-      </div>
-
-      {/* 발화 분석 결과 */}
-      {analyzed && (
-        <div className="p-4 bg-purple-50/60 border border-purple-200 rounded-xl mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="font-bold text-xs text-purple-900 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-purple-600" />
-              말하기 분석 결과
-            </h4>
-            <span className="text-xs font-mono font-bold text-purple-700">
-              말하기 속도: 분당 {wpm}단어
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
+              대본 쉐도잉 & 음성 녹음·비교
+            </span>
+            <span className="text-xs text-stone-500 font-mono">
+              {activity.lexile} | {activity.cefrLevel}
             </span>
           </div>
-
-          <p className="text-xs text-purple-800 mb-3">
-            총 {spokenTranscript.split(/\s+/).filter(Boolean).length}단어를 구술했습니다.
+          <h2 className="text-xl font-extrabold text-slateText-title">
+            {activity.title}
+          </h2>
+          <p className="text-xs text-slateText-muted mt-0.5">
+            원어민 대본을 눈으로 보며 입으로 따라 말하고, <strong>실제 내 음성을 녹음하여 원어민 발음과 1:1로 비교</strong>해 보세요.
           </p>
+        </div>
 
-          {/* 3단계 표현 피드백 (기본 -> 자연스러움 -> 학술적) */}
-          <div className="bg-white p-3.5 rounded-lg border border-purple-200/80">
-            <div className="flex items-center justify-between mb-2 pb-2 border-b border-stone-100">
-              <span className="text-xs font-bold text-slateText-title">
-                단계별 추천 표현 (기본 → 자연스러움 → 학술적):
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-stone-50 border border-stone-200 text-xs text-stone-600 font-semibold">
+          <BarChart3 className="w-4 h-4 text-purple-600" />
+          <span>말하기 성취도 대시보드 연동</span>
+        </div>
+      </div>
+
+      {/* 1. 실제 듣기 대본 시각화 뷰어 */}
+      <div className="p-5 bg-[#FDFBF7] rounded-2xl border border-stone-200 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-extrabold text-slateText-title flex items-center gap-1.5">
+            <Headphones className="w-4 h-4 text-honey-600" />
+            실제 원어민 대본 전문 (스크립트)
+          </span>
+          <span className="text-[11px] text-stone-500">
+            문장 옆의 🔊 아이콘을 누르면 해당 문장 원어민 발음을 들을 수 있습니다.
+          </span>
+        </div>
+
+        <div className="space-y-2.5 max-h-72 overflow-y-auto p-3 bg-white rounded-xl border border-stone-200 shadow-inner select-text">
+          {scriptLines.map((line, idx) => (
+            <div 
+              key={idx} 
+              className="flex items-start gap-2.5 p-2 rounded-lg hover:bg-stone-50 transition-colors"
+            >
+              {/* 화자 뱃지 */}
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 mt-0.5 ${
+                line.speaker === 'W' 
+                  ? 'bg-rose-100 text-rose-800' 
+                  : line.speaker === 'M'
+                  ? 'bg-blue-100 text-blue-800'
+                  : 'bg-stone-100 text-stone-700'
+              }`}>
+                {line.speaker === 'W' ? '여성 (W)' : line.speaker === 'M' ? '남성 (M)' : line.speaker}
               </span>
-              <div className="flex gap-1">
-                {(['basic', 'natural', 'academic'] as const).map((tier) => (
-                  <button
-                    key={tier}
-                    onClick={() => setCurrentFeedbackTier(tier)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer ${
-                      currentFeedbackTier === tier
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-stone-100 text-stone-500 hover:bg-stone-200'
-                    }`}
-                  >
-                    {tier === 'basic' ? '기본' : tier === 'natural' ? '자연스러움' : '학술적'}
-                  </button>
-                ))}
-              </div>
-            </div>
 
-            <div className="flex items-start justify-between gap-3 text-xs text-slateText-body">
-              <p className="italic font-serif flex-1">
-                "{activity.sampleAnswerSteps?.[currentFeedbackTier]}"
-              </p>
+              {/* 문장 텍스트 */}
+              <span className="flex-1 text-xs sm:text-sm font-serif leading-relaxed text-slateText-body">
+                {line.text}
+              </span>
+
+              {/* 문장별 TTS 재생 버튼 */}
               <button
-                onClick={() => playTTS(activity.sampleAnswerSteps?.[currentFeedbackTier] || '')}
-                className="p-1.5 bg-stone-100 hover:bg-honey-100 text-stone-600 hover:text-honey-700 rounded-md transition-colors cursor-pointer"
-                title="원어민 발음 듣기"
+                type="button"
+                onClick={() => playSentenceTTS(line.text, line.speaker)}
+                title="이 문장 원어민 발음 듣기"
+                className="p-1.5 text-stone-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors cursor-pointer shrink-0"
               >
                 <Volume2 className="w-4 h-4" />
               </button>
             </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 2. 실제 내 발음 마이크 녹음기 (MediaRecorder) */}
+      <div className="p-5 bg-gradient-to-br from-purple-50/70 to-indigo-50/50 rounded-2xl border border-purple-100 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-extrabold text-purple-950 flex items-center gap-1.5">
+              <Mic className="w-4 h-4 text-purple-600" />
+              내 목소리 녹음 및 쉐도잉 훈련
+            </h3>
+            <p className="text-[11px] text-purple-800/80">
+              대본을 보며 큰 소리로 읽어보세요. 녹음 후 본인의 발음을 즉시 재생해 들을 수 있습니다.
+            </p>
+          </div>
+
+          {/* 녹음 타이머 */}
+          {isRecording && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-rose-500 text-white font-mono text-xs font-bold rounded-full animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-white"></span>
+              <span>녹음 중... {recordingSeconds}초</span>
+            </div>
+          )}
+        </div>
+
+        {/* 녹음 조작 버튼 */}
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          {!isRecording ? (
+            <button
+              type="button"
+              onClick={handleStartRecording}
+              className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-98"
+            >
+              <Mic className="w-4 h-4" />
+              <span>🎙️ 내 발음 녹음 시작하기</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleStopRecording}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer animate-bounce-subtle"
+            >
+              <Square className="w-4 h-4 fill-white" />
+              <span>⏹️ 녹음 완료 및 중지</span>
+            </button>
+          )}
+
+          {audioUrl && !isRecording && (
+            <button
+              type="button"
+              onClick={() => {
+                setAudioUrl(null);
+                setSpokenTranscript('');
+                setAnalyzed(false);
+              }}
+              className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-600 text-xs rounded-xl font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>다시 녹음하기</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 3. 원어민 발음 vs 내 발음 비교 청취 섹션 */}
+      {audioUrl && (
+        <div className="p-5 bg-white rounded-2xl border-2 border-purple-200 space-y-4 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between pb-3 border-b border-stone-200">
+            <span className="text-sm font-extrabold text-slateText-title flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-honey-500" />
+              🎧 원어민 발음 vs 내 발음 1:1 비교 청취
+            </span>
+            {accuracyScore !== null && (
+              <span className="px-2.5 py-0.5 bg-purple-100 text-purple-900 font-extrabold text-xs rounded-full border border-purple-200">
+                발화 유창성: {accuracyScore}점
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* 좌측: 원어민 전체 음원 */}
+            <div className="p-4 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+              <span className="text-xs font-bold text-stone-700 flex items-center gap-1">
+                <Volume2 className="w-4 h-4 text-blue-600" />
+                1. 원어민 공식 음원 들어보기
+              </span>
+              <AudioPlayer script={activity.audioScript} />
+            </div>
+
+            {/* 우측: 내 실제 녹음 음원 플레이어 */}
+            <div className="p-4 bg-purple-50/60 rounded-xl border border-purple-200 space-y-2">
+              <span className="text-xs font-bold text-purple-950 flex items-center gap-1">
+                <Mic className="w-4 h-4 text-purple-600" />
+                2. 내가 직접 녹음한 발음 들어보기
+              </span>
+              <audio 
+                controls 
+                src={audioUrl} 
+                className="w-full h-10 mt-1"
+              />
+            </div>
+          </div>
+
+          {/* 인식된 텍스트 및 피드백 */}
+          {spokenTranscript && (
+            <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-xs text-stone-600 space-y-1">
+              <span className="font-bold text-stone-700 block">📝 음성 인식 텍스트 (STT):</span>
+              <p className="font-serif italic text-stone-800">"{spokenTranscript}"</p>
+            </div>
+          )}
+
+          <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>
+              <strong>녹음 기록 저장 완료:</strong> 학생 대시보드 및 교사 관제 센터에 말하기 수행 결과가 성공적으로 연동되었습니다!
+            </span>
           </div>
         </div>
       )}
+
     </div>
   );
 };

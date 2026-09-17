@@ -421,6 +421,23 @@ export const App: React.FC = () => {
     }
   };
 
+  // 활동 모드(듣기/읽기/말하기/쓰기) 선택 시 작업 화면 즉시 전환 핸들러
+  const handleSelectMode = (mode: ActivityMode) => {
+    setSelectedMode(mode);
+    if (mode === 'all') return;
+
+    // 해당 모드에 속한 활동이 있으면 선택, 없으면 현재 활동의 모드를 즉시 변경
+    const matching = activities.find((a) => a.mode === mode);
+    if (matching) {
+      handleSelectActivity(matching);
+    } else {
+      setSelectedActivity((prev) => ({
+        ...prev,
+        mode: mode,
+      }));
+    }
+  };
+
   // 과업 필터링 (동적 activities 기준)
   const filteredActivities = activities.filter((activity) => {
     const matchesGrade = selectedGrade === 'ALL' || activity.grade === selectedGrade;
@@ -457,7 +474,7 @@ export const App: React.FC = () => {
         currentGrade={selectedGrade}
         onSelectGrade={setSelectedGrade}
         currentMode={selectedMode}
-        onSelectMode={setSelectedMode}
+        onSelectMode={handleSelectMode}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         searchQuery={searchQuery}
@@ -517,6 +534,38 @@ export const App: React.FC = () => {
                     <Sparkles className="w-3.5 h-3.5" /> AI 6단계 코칭 상태
                   </button>
                 </div>
+              </div>
+
+              {/* 워크스페이스 상시 4대 핵심 영역 탭 바 (듣기/읽기/말하기/쓰기 즉시 전환) */}
+              <div className="mb-4 flex flex-wrap items-center gap-2 p-1.5 bg-stone-100/90 rounded-2xl border border-stone-200 shadow-xs">
+                {[
+                  { id: 'listening', label: '🎧 1. 실전 듣기 평가', sub: '4지선다 퀴즈 & 대시보드' },
+                  { id: 'reading', label: '📖 2. 지문 심층 독해', sub: '소크라테스식 3단계 발문' },
+                  { id: 'speaking', label: '🗣️ 3. 쉐도잉 말하기', sub: '대본 띄우기 & 내 음성 녹음' },
+                  { id: 'writing', label: '✍️ 4. 서술형 쓰기', sub: '빈칸추론·주제/요지 직접 작성' },
+                ].map((tab) => {
+                  const isActive = selectedActivity.mode === tab.id || (selectedActivity.mode.includes('-') && tab.id === 'reading');
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedActivity((prev) => ({
+                          ...prev,
+                          mode: tab.id as any,
+                        }));
+                      }}
+                      className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl transition-all cursor-pointer flex flex-col items-center justify-center text-center ${
+                        isActive
+                          ? 'bg-white text-slateText-title font-extrabold shadow-sm border border-stone-300 ring-2 ring-honey-400'
+                          : 'text-stone-500 hover:text-stone-800 hover:bg-stone-200/60 font-semibold'
+                      }`}
+                    >
+                      <span className="text-xs">{tab.label}</span>
+                      <span className="text-[10px] text-stone-400 font-normal">{tab.sub}</span>
+                    </button>
+                  );
+                })}
               </div>
 
               {/* 활동 모드별 컴포넌트 마운트 */}
