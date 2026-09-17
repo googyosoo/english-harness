@@ -93,11 +93,15 @@ const renderHighlightedText = (text: string, query: string) => {
   );
 };
 
+// 모듈 레벨 메모리 캐시 (한 번 로드되면 모달 열고 닫을 때 재요청 없이 즉시 유지)
+let cachedExamBankData: ExamBankItem[] | null = null;
+
 // 검색어가 포함된 문맥 스니펫 추출
 const getContextSnippet = (text: string, query: string): string => {
   if (!query.trim() || !text) {
     return text.slice(0, 180) + (text.length > 180 ? '...' : '');
   }
+
   const q = query.trim().toLowerCase();
   const lower = text.toLowerCase();
   let idx = lower.indexOf(q);
@@ -118,14 +122,29 @@ const getContextSnippet = (text: string, query: string): string => {
   return `${prefix}${text.slice(start, end)}${suffix}`;
 };
 
-  // 전체 기출 데이터 비동기 로드 (/data/exam_bank.json)
+  // 2020~2026 전체 기출 데이터 비동기 로드 (/data/exam_bank.json, 총 2,209개)
   useEffect(() => {
-    if (isOpen && items.length <= 15) {
+    // 캐시에 데이터가 있으면 즉시 세팅
+    if (cachedExamBankData && cachedExamBankData.length > 100) {
+      if (items.length <= 20) {
+        setItems(cachedExamBankData);
+      }
+      return;
+    }
+
+    // 모달이 열려있거나 아직 20개 이하(초기 샘플)인 경우 전체 2,209개 데이터 fetch
+    if (isOpen || items.length <= 20) {
       setIsLoading(true);
       fetch('/data/exam_bank.json')
-        .then(res => res.json())
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+          return res.json();
+        })
         .then((data: ExamBankItem[]) => {
-          setItems(data);
+          if (Array.isArray(data) && data.length > 0) {
+            cachedExamBankData = data;
+            setItems(data);
+          }
           setIsLoading(false);
         })
         .catch(err => {
@@ -133,11 +152,20 @@ const getContextSnippet = (text: string, query: string): string => {
           setIsLoading(false);
         });
     }
-  }, [isOpen]);
+  }, [isOpen, items.length]);
 
-  // 사용 가능한 연도 목록 추출
+  // 부모(App.tsx)에서 프리로드된 examItems가 들어오면 즉시 동기화
+  useEffect(() => {
+    if (examItems && examItems.length > items.length) {
+      setItems(examItems);
+    }
+  }, [examItems, items.length]);
+
+  // 사용 가능한 연도 목록 추출 (2020~2026 보장 및 최신순 정렬)
   const availableYears = useMemo(() => {
-    const years = Array.from(new Set(items.map(i => i.year))).sort().reverse();
+    const defaultYears = ['2026', '2025', '2024', '2023', '2022', '2021', '2020'];
+    const yearsSet = new Set([...defaultYears, ...items.map(i => i.year)]);
+    const years = Array.from(yearsSet).filter(Boolean).sort().reverse();
     return ['전체', ...years];
   }, [items]);
 

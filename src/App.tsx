@@ -69,6 +69,20 @@ export const App: React.FC = () => {
   const [timeSpent, setTimeSpent] = useState<number>(initialSaved.timeSpent || 0);
   const [studentOutput, setStudentOutput] = useState<string>(initialSaved.studentOutput || '');
   const [lastSavedAt, setLastSavedAt] = useState<string>(initialSaved.lastSavedAt || '방금 전');
+  // 2020~2026 전체 기출 문항 상태 (초기 샘플 -> 백그라운드에서 2,209문항 전체 로드)
+  const [examItems, setExamItems] = useState<ExamBankItem[]>(INITIAL_EXAM_BANK_SAMPLES);
+
+  // 앱 마운트 시 2020~2026 전체 기출 데이터 백그라운드 프리로드
+  useEffect(() => {
+    fetch('/data/exam_bank.json')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: ExamBankItem[] | null) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setExamItems(data);
+        }
+      })
+      .catch((err) => console.warn('Preload exam bank data failed:', err));
+  }, []);
 
   // 6단계 학습 코칭 안전망 상태 관리
   const [harnessStatus, setHarnessStatus] = useState<HarnessLayerStatus>({
@@ -511,7 +525,7 @@ export const App: React.FC = () => {
         onClose={() => setIsExamBankOpen(false)}
         onLoadExamItem={handleLoadExamItem}
         onLoadExamItems={handleLoadMultipleExamItems}
-        examItems={INITIAL_EXAM_BANK_SAMPLES}
+        examItems={examItems}
       />
 
       {/* 메인 뷰 컨테이너 */}
