@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
+import { ActivityContent, HarnessLayerStatus, DifficultyLevel } from '../../types/harness';
 import { AudioPlayer } from '../common/AudioPlayer';
-import { Layers, ArrowRight, CheckCircle2, Database, FileEdit } from 'lucide-react';
+import { Layers, ArrowRight, CheckCircle2, Database, FileEdit, Lightbulb } from 'lucide-react';
 import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
 import { runFullSmartSensorInspection, SmartSensorReportData } from '../../utils/sensorEngine';
 import { IntelligentSensorReport } from '../common/IntelligentSensorReport';
@@ -10,12 +10,14 @@ interface IntegratedModuleProps {
   activity: ActivityContent;
   updateHarnessStatus: (updater: (prev: HarnessLayerStatus) => HarnessLayerStatus) => void;
   onStudentOutputChange?: (output: string) => void;
+  difficultyLevel?: DifficultyLevel;
 }
 
 export const IntegratedModule: React.FC<IntegratedModuleProps> = ({
   activity,
   updateHarnessStatus,
   onStudentOutputChange,
+  difficultyLevel = 'intermediate',
 }) => {
   // 로컬 저장소에서 이전 작성 상태 복원
   const savedData = loadStudentProgress().integratedDrafts[activity.id];

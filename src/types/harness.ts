@@ -1,5 +1,7 @@
 export type GradeLevel = 'G1' | 'G2' | 'G3';
 
+export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
+
 export type ActivityMode = 
   | 'all'
   | 'listening'

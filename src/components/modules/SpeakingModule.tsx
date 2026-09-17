@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
+import { ActivityContent, HarnessLayerStatus, DifficultyLevel } from '../../types/harness';
 import { 
   Mic, MicOff, Volume2, Sparkles, Play, Square, 
-  RotateCcw, CheckCircle2, User, Headphones, BarChart3, AlertCircle 
+  RotateCcw, CheckCircle2, User, Headphones, BarChart3, AlertCircle, 
+  Lightbulb, Gauge
 } from 'lucide-react';
 import { AudioPlayer } from '../common/AudioPlayer';
 import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
@@ -12,11 +13,13 @@ import { runFullSmartSensorInspection } from '../../utils/sensorEngine';
 interface SpeakingModuleProps {
   activity: ActivityContent;
   updateHarnessStatus: (updater: (prev: HarnessLayerStatus) => HarnessLayerStatus) => void;
+  difficultyLevel?: DifficultyLevel;
 }
 
 export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
   activity,
   updateHarnessStatus,
+  difficultyLevel = 'intermediate',
 }) => {
   const scriptText = activity.audioScript || activity.readingPassage || '';
 
@@ -242,6 +245,15 @@ export const SpeakingModule: React.FC<SpeakingModuleProps> = ({
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
               대본 쉐도잉 & 음성 녹음·비교
+            </span>
+            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+              difficultyLevel === 'beginner'
+                ? 'bg-emerald-100 text-emerald-800'
+                : difficultyLevel === 'intermediate'
+                ? 'bg-amber-100 text-amber-800'
+                : 'bg-purple-100 text-purple-800'
+            }`}>
+              {difficultyLevel === 'beginner' ? '🌱 초급: 0.8배속 에코 쉐도잉' : difficultyLevel === 'intermediate' ? '🌿 중급: 문장별 비교 녹음' : '🌳 고급: 실전 구어 스피치'}
             </span>
             <span className="text-xs text-stone-500 font-mono">
               {activity.lexile} | {activity.cefrLevel}

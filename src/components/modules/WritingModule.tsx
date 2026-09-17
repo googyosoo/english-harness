@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
+import { ActivityContent, HarnessLayerStatus, DifficultyLevel } from '../../types/harness';
 import { 
   PenTool, Sparkles, BookOpen, CheckCircle2, AlertCircle, 
   ArrowRight, FileText, BarChart3, HelpCircle, Check,
-  Bot, Wand2, Zap, RefreshCw, Lightbulb
+  Bot, Wand2, Zap, RefreshCw, Lightbulb, Puzzle, Shuffle
 } from 'lucide-react';
 import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
 import { loadCurrentUser, saveSubmission } from '../../utils/authStorage';
@@ -15,12 +15,14 @@ interface WritingModuleProps {
   activity: ActivityContent;
   updateHarnessStatus: (updater: (prev: HarnessLayerStatus) => HarnessLayerStatus) => void;
   onStudentOutputChange?: (output: string) => void;
+  difficultyLevel?: DifficultyLevel;
 }
 
 export const WritingModule: React.FC<WritingModuleProps> = ({
   activity,
   updateHarnessStatus,
   onStudentOutputChange,
+  difficultyLevel = 'intermediate',
 }) => {
   const passageText = activity.readingPassage || activity.audioScript || '';
 
@@ -65,6 +67,26 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
     };
   }, [passageText, activity.targetKeywords]);
 
+  // 초급(Beginner)용 단어 블록 조립(Scramble) 문장 생성
+  const scrambleData = useMemo(() => {
+    const raw = blankMissionData.originalSentence || 'This study reveals that continuous practice enhances linguistic fluency.';
+    const words = raw.split(/\s+/).filter(Boolean);
+    const chunkSize = Math.max(2, Math.ceil(words.length / 4));
+    const chunks: string[] = [];
+    for (let i = 0; i < words.length; i += chunkSize) {
+      chunks.push(words.slice(i, i + chunkSize).join(' '));
+    }
+    // 셔플된 청크
+    const shuffled = [...chunks].sort((a, b) => a.length - b.length || a.localeCompare(b));
+    return {
+      originalSentence: raw,
+      chunks,
+      shuffled,
+    };
+  }, [blankMissionData.originalSentence]);
+
+  const [selectedChunks, setSelectedChunks] = useState<string[]>([]);
+
   // 과업 변경 시 초기화
   useEffect(() => {
     const saved = loadStudentProgress();
@@ -74,6 +96,7 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
     setSummaryAnswer('');
     setIsSubmitted(false);
     setSmartReport(null);
+    setSelectedChunks([]);
   }, [activity.id]);
 
   // 1. 빈칸 추론 제출 핸들러
@@ -317,18 +340,82 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slateText-title flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4 text-indigo-600" />
-                지문을 읽고, 글의 중심 생각(주제 또는 요지)을 1~2문장의 영어로 직접 진술하세요.
+                지문을 읽고, 글의 중심 생각(주제 또는 요지)을 영어로 직접 진술하세요.
               </label>
-              <span className="text-[11px] text-stone-500 font-mono">
-                {topicAnswer.trim().split(/\s+/).filter(Boolean).length}단어 작성됨
-              </span>
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                  difficultyLevel === 'beginner'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : difficultyLevel === 'intermediate'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-purple-100 text-purple-800'
+                }`}>
+                  {difficultyLevel === 'beginner' ? '🌱 초급 비계 모드' : difficultyLevel === 'intermediate' ? '🌿 중급 표준 모드' : '🌳 고급 심층 모드'}
+                </span>
+                <span className="text-[11px] text-stone-500 font-mono">
+                  {topicAnswer.trim().split(/\s+/).filter(Boolean).length}단어 작성됨
+                </span>
+              </div>
             </div>
+
+            {/* 🌱 초급 전용: 단어 블록 조립기 (Scramble Sentence Builder) */}
+            {difficultyLevel === 'beginner' && (
+              <div className="p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl space-y-2.5 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <Puzzle className="w-4 h-4 text-emerald-600" />
+                    단어 조각을 순서대로 클릭하여 기초 문장을 완성하세요:
+                  </span>
+                  {selectedChunks.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedChunks([]);
+                        setTopicAnswer('');
+                      }}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
+                    >
+                      조립 초기화
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {scrambleData.shuffled.map((chunk, idx) => {
+                    const isChosen = selectedChunks.includes(chunk);
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        disabled={isChosen}
+                        onClick={() => {
+                          const next = [...selectedChunks, chunk];
+                          setSelectedChunks(next);
+                          setTopicAnswer(next.join(' '));
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-serif transition-all cursor-pointer ${
+                          isChosen
+                            ? 'bg-stone-200 text-stone-400 line-through cursor-not-allowed'
+                            : 'bg-white hover:bg-emerald-100 text-emerald-900 font-bold border border-emerald-300 shadow-2xs hover:scale-105'
+                        }`}
+                      >
+                        + {chunk}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <textarea
               rows={3}
               value={topicAnswer}
               onChange={(e) => setTopicAnswer(e.target.value)}
-              placeholder="예시: This passage emphasizes that variation in human minds is essential for the survival and adaptation of our species."
+              placeholder={
+                difficultyLevel === 'beginner'
+                  ? "위 단어 조각을 클릭하거나 직접 입력하세요: This passage highlights..."
+                  : "예시: This passage emphasizes that variation in human minds is essential for the survival and adaptation of our species."
+              }
               className="w-full p-3.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm font-serif leading-relaxed text-slateText-body focus:outline-none focus:border-indigo-500 shadow-inner"
             />
 
@@ -451,6 +538,32 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
                 {summaryAnswer.trim().split(/\s+/).filter(Boolean).length}단어
               </span>
             </div>
+
+            {/* 수준별 문장 뼈대(Sentence Starter) 지원 */}
+            {(difficultyLevel === 'beginner' || difficultyLevel === 'intermediate') && (
+              <div className="p-3 bg-white/90 border border-emerald-200 rounded-xl space-y-1.5 animate-in fade-in">
+                <span className="text-[11px] font-bold text-emerald-900 flex items-center gap-1">
+                  <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                  추천 요약 문장 뼈대 (클릭하면 아래에 자동 입력됩니다):
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    "In this passage, the author highlights that ... because ...",
+                    "Although some people believe that ..., the truth is that ...",
+                    "To solve this problem, we need to ... as a result."
+                  ].map((frame, fIdx) => (
+                    <button
+                      key={fIdx}
+                      type="button"
+                      onClick={() => setSummaryAnswer(frame)}
+                      className="text-left px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-serif text-emerald-950 transition-colors cursor-pointer"
+                    >
+                      • {frame}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <textarea
               rows={4}

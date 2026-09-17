@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GradeLevel, ActivityMode, ActivityContent, HarnessLayerStatus } from './types/harness';
+import { GradeLevel, ActivityMode, ActivityContent, HarnessLayerStatus, DifficultyLevel } from './types/harness';
 import { UserProfile } from './types/auth';
 import { CURRICULUM_DATA } from './data/curriculumData';
 import { INITIAL_EXAM_BANK_SAMPLES, ExamBankItem } from './data/examBank';
@@ -15,7 +15,7 @@ import { ReadingModule } from './components/modules/ReadingModule';
 import { SpeakingModule } from './components/modules/SpeakingModule';
 import { WritingModule } from './components/modules/WritingModule';
 import { IntegratedModule } from './components/modules/IntegratedModule';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Layers, SlidersHorizontal, BookOpen, Headphones, PenTool, MessageSquare } from 'lucide-react';
 import { loadStudentProgress, saveStudentProgress, clearStudentProgress } from './utils/storage';
 import { loadCurrentUser, saveCurrentUser, logoutUser, saveSubmission } from './utils/authStorage';
 import { 
@@ -29,6 +29,24 @@ export const App: React.FC = () => {
   // 인증 및 사용자 세션 상태
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => loadCurrentUser());
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(() => !loadCurrentUser());
+
+  // 2022 개정 맞춤형 학습 난이도 상태 (초급 🌱 / 중급 🌿 / 고급 🌳)
+  const [difficultyLevel, setDifficultyLevel] = useState<DifficultyLevel>(() => {
+    try {
+      const saved = localStorage.getItem('english_difficulty_level');
+      if (saved === 'beginner' || saved === 'intermediate' || saved === 'advanced') {
+        return saved;
+      }
+    } catch (e) {}
+    return 'intermediate';
+  });
+
+  const handleSelectDifficulty = (level: DifficultyLevel) => {
+    setDifficultyLevel(level);
+    try {
+      localStorage.setItem('english_difficulty_level', level);
+    } catch (e) {}
+  };
 
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | 'ALL'>('ALL');
   const [selectedMode, setSelectedMode] = useState<ActivityMode>('all');
@@ -536,15 +554,59 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* 워크스페이스 상시 4대 핵심 영역 탭 바 (듣기/읽기/말하기/쓰기 즉시 전환) */}
+              {/* 상단 컨트롤 바: 진행 활동명 + 2022 개정 수준별 난이도 토글 스위치 */}
+              <div className="mb-4 p-4 bg-white rounded-3xl border border-stone-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="w-2.5 h-2.5 rounded-full bg-honey-500 animate-pulse"></span>
+                    <span className="text-[11px] font-extrabold text-stone-400 font-mono uppercase tracking-wider">Active Learning Task</span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-honey-100 text-honey-800">
+                      {selectedActivity.grade} | {selectedActivity.cefrLevel}
+                    </span>
+                  </div>
+                  <h3 className="text-base font-extrabold text-slateText-title">
+                    {selectedActivity.title}
+                  </h3>
+                </div>
+
+                {/* 수준별 난이도(비계) 선택 토글 버튼 바 */}
+                <div className="flex items-center gap-1.5 p-1 bg-stone-100 rounded-2xl border border-stone-200 self-start md:self-auto">
+                  {[
+                    { id: 'beginner', label: '🌱 초급', sub: '기초 비계·블록 조립', color: 'text-emerald-700' },
+                    { id: 'intermediate', label: '🌿 중급', sub: '표준 완성·프레임', color: 'text-amber-700' },
+                    { id: 'advanced', label: '🌳 고급', sub: '심층 확장·자유 영작', color: 'text-purple-700' }
+                  ].map((lvl) => {
+                    const isSelected = difficultyLevel === lvl.id;
+                    return (
+                      <button
+                        key={lvl.id}
+                        type="button"
+                        onClick={() => handleSelectDifficulty(lvl.id as DifficultyLevel)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-white text-stone-900 shadow-sm border border-stone-300 ring-2 ring-honey-400'
+                            : 'text-stone-500 hover:text-stone-800 hover:bg-stone-200/50'
+                        }`}
+                      >
+                        <span className={isSelected ? lvl.color : ''}>{lvl.label}</span>
+                        <span className="text-[10px] text-stone-400 font-normal hidden lg:inline">
+                          ({lvl.sub})
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 2022 개정 이해-표현 연계 중심의 직관적 3대 과업 탭 바 */}
               <div className="mb-4 flex flex-wrap items-center gap-2 p-1.5 bg-stone-100/90 rounded-2xl border border-stone-200 shadow-xs">
                 {[
-                  { id: 'listening', label: '🎧 1. 실전 듣기 평가', sub: '4지선다 퀴즈 & 대시보드' },
-                  { id: 'reading', label: '📖 2. 지문 심층 독해', sub: '소크라테스식 3단계 발문' },
-                  { id: 'speaking', label: '🗣️ 3. 쉐도잉 말하기', sub: '대본 띄우기 & 내 음성 녹음' },
-                  { id: 'writing', label: '✍️ 4. 서술형 쓰기', sub: '빈칸추론·주제/요지 직접 작성' },
+                  { id: 'speaking', label: '🎧🗣️ 1. 듣고 말하기', sub: 'Listen & Speak (청취 ➔ 쉐도잉 발화)' },
+                  { id: 'writing', label: '📖✍️ 2. 읽고 쓰기', sub: 'Read & Write (지문 독해 ➔ 수준별 서술 영작)' },
+                  { id: 'read-write', label: '📑✍️ 3. 듣고 요약하기', sub: 'Listen & Summary (담화 청취 ➔ 핵심 압축 요약)' },
+                  { id: 'listening', label: '🎧 실전 듣기 평가', sub: '4지선다 객관식 퀴즈 모드' },
                 ].map((tab) => {
-                  const isActive = selectedActivity.mode === tab.id || (selectedActivity.mode.includes('-') && tab.id === 'reading');
+                  const isActive = selectedActivity.mode === tab.id || (tab.id === 'read-write' && selectedActivity.mode.includes('-'));
                   return (
                     <button
                       key={tab.id}
@@ -555,7 +617,7 @@ export const App: React.FC = () => {
                           mode: tab.id as any,
                         }));
                       }}
-                      className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl transition-all cursor-pointer flex flex-col items-center justify-center text-center ${
+                      className={`flex-1 min-w-[150px] py-2 px-3 rounded-xl transition-all cursor-pointer flex flex-col items-center justify-center text-center ${
                         isActive
                           ? 'bg-white text-slateText-title font-extrabold shadow-sm border border-stone-300 ring-2 ring-honey-400'
                           : 'text-stone-500 hover:text-stone-800 hover:bg-stone-200/60 font-semibold'
@@ -568,12 +630,13 @@ export const App: React.FC = () => {
                 })}
               </div>
 
-              {/* 활동 모드별 컴포넌트 마운트 */}
+              {/* 활동 모드별 컴포넌트 마운트 (난이도 prop 전달) */}
               {selectedActivity.mode.includes('-') ? (
                 <IntegratedModule
                   activity={selectedActivity}
                   updateHarnessStatus={setHarnessStatus}
                   onStudentOutputChange={handleStudentOutputChange}
+                  difficultyLevel={difficultyLevel}
                 />
               ) : selectedActivity.mode === 'listening' ? (
                 <ListeningModule
@@ -589,12 +652,14 @@ export const App: React.FC = () => {
                 <SpeakingModule
                   activity={selectedActivity}
                   updateHarnessStatus={setHarnessStatus}
+                  difficultyLevel={difficultyLevel}
                 />
               ) : (
                 <WritingModule
                   activity={selectedActivity}
                   updateHarnessStatus={setHarnessStatus}
                   onStudentOutputChange={handleStudentOutputChange}
+                  difficultyLevel={difficultyLevel}
                 />
               )}
             </section>
