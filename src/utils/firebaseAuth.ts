@@ -10,17 +10,32 @@ export interface FirebaseConfigOptions {
   storageBucket?: string;
   messagingSenderId?: string;
   appId?: string;
+  measurementId?: string;
 }
 
-// 기본 안내용 플레이스홀더 또는 저장된 설정 불러오기
-export const loadSavedFirebaseConfig = (): FirebaseConfigOptions | null => {
+// 기본 내장 Firebase 프로젝트 설정 (harness-english)
+export const DEFAULT_FIREBASE_CONFIG: FirebaseConfigOptions = {
+  apiKey: "AIzaSyDAXcc5VxGncQGA6rKJrkvu-CaC7NW5I94",
+  authDomain: "harness-english.firebaseapp.com",
+  projectId: "harness-english",
+  storageBucket: "harness-english.firebasestorage.app",
+  messagingSenderId: "930413095196",
+  appId: "1:930413095196:web:f4ba6035cf11952a73f2d9",
+  measurementId: "G-4VTGEV6N91"
+};
+
+// 저장된 설정 불러오기 (없으면 내장된 DEFAULT_FIREBASE_CONFIG 사용)
+export const loadSavedFirebaseConfig = (): FirebaseConfigOptions => {
   try {
     const raw = localStorage.getItem(FIREBASE_CONFIG_STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.apiKey) return parsed;
+    }
   } catch (e) {
-    return null;
+    // ignore
   }
+  return DEFAULT_FIREBASE_CONFIG;
 };
 
 export const saveFirebaseConfig = (config: FirebaseConfigOptions): void => {

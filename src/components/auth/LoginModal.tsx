@@ -261,44 +261,47 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             </div>
           )}
 
-          {/* Firebase 연동 설정 박스 (등록되지 않았거나 설정을 원할 때 눈에 확 띄게 카드 형태로 표시) */}
-          <div className="p-4 bg-amber-50/80 border-2 border-amber-300 rounded-2xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900">
-                <Settings className="w-4 h-4 text-amber-600" />
-                <span>⚙️ [필수] Firebase 프로젝트 키 등록</span>
+          {/* Firebase 연동 완료 상태 안내 */}
+          <div className="pt-2">
+            <div className="flex items-center justify-between px-3 py-2 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs text-emerald-800">
+              <div className="flex items-center gap-1.5 font-medium">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>Firebase 연동 완료: <strong className="font-mono text-emerald-900">harness-english</strong></span>
               </div>
-              {savedConfig ? (
-                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[10px] font-bold">
-                  ✓ 등록 완료됨
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded-md text-[10px] font-bold animate-pulse">
-                  ! 키 등록 필요
-                </span>
-              )}
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(!showConfigModal)}
+                className="text-[11px] text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1 cursor-pointer"
+              >
+                <Settings className="w-3 h-3" />
+                <span>{showConfigModal ? '닫기' : '설정 변경'}</span>
+              </button>
             </div>
 
-            <p className="text-[11px] text-amber-800/90 leading-relaxed">
-              Firebase 콘솔의 <strong>[프로젝트 설정 ➔ 내 앱 ➔ 웹( &lt;/&gt; )]</strong>에 나오는 <code>const firebaseConfig = &#123; ... &#125;;</code> 코드를 아래 상자에 그대로 붙여넣고 [설정 저장]을 눌러주세요.
-            </p>
-
-            <form onSubmit={handleSaveFirebaseConfig} className="space-y-2">
-              <textarea
-                rows={4}
-                required
-                value={configInputText}
-                onChange={(e) => setConfigInputText(e.target.value)}
-                placeholder={`const firebaseConfig = {\n  apiKey: "AIzaSy...",\n  authDomain: "your-project.firebaseapp.com",\n  projectId: "your-project",\n  appId: "1:..."\n};`}
-                className="w-full p-2.5 bg-white border border-amber-300 rounded-xl font-mono text-[11px] text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-400 leading-tight shadow-inner"
-              />
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-amber-400 hover:bg-amber-500 text-amber-950 font-extrabold text-xs rounded-xl shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <span>💾 설정 저장 및 연동 완료하기</span>
-              </button>
-            </form>
+            {/* 설정 변경 클릭 시에만 노출되는 토글 창 */}
+            {showConfigModal && (
+              <div className="mt-2.5 p-3.5 bg-stone-50 border border-stone-200 rounded-xl space-y-2.5 animate-in fade-in">
+                <p className="text-[11px] text-stone-600 leading-relaxed">
+                  새로운 Firebase 프로젝트 키로 교체하려면 아래에 붙여넣고 저장하세요.
+                </p>
+                <form onSubmit={handleSaveFirebaseConfig} className="space-y-2">
+                  <textarea
+                    rows={3}
+                    required
+                    value={configInputText}
+                    onChange={(e) => setConfigInputText(e.target.value)}
+                    placeholder={`const firebaseConfig = {\n  apiKey: "...",\n  projectId: "..."\n};`}
+                    className="w-full p-2 bg-white border border-stone-300 rounded-lg font-mono text-[10px] text-stone-800 focus:outline-none focus:ring-1 focus:ring-honey-500 shadow-inner"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-stone-800 hover:bg-stone-900 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                  >
+                    설정 업데이트
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         </div>
 
