@@ -1,13 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { UserProfile, UserRole } from '../../types/auth';
 import { 
-  User, GraduationCap, AlertCircle, Settings, CheckCircle2, 
+  User, GraduationCap, AlertCircle, 
   ShieldCheck, ArrowRight, Loader2 
 } from 'lucide-react';
-import { 
-  signInWithGooglePopup, loadSavedFirebaseConfig, 
-  saveFirebaseConfig, FirebaseConfigOptions 
-} from '../../utils/firebaseAuth';
+import { signInWithGooglePopup } from '../../utils/firebaseAuth';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -29,10 +26,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // 파이어베이스 설정 상태
-  const [savedConfig, setSavedConfig] = useState<FirebaseConfigOptions | null>(() => loadSavedFirebaseConfig());
-  const [showConfigModal, setShowConfigModal] = useState(false);
-  const [configInputText, setConfigInputText] = useState('');
+
 
   if (!isOpen) return null;
 
@@ -92,12 +86,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
     } catch (err: any) {
       setIsSigningIn(false);
 
-      if (err.message === 'FIREBASE_CONFIG_MISSING') {
-        setLoginError('파이어베이스 설정 정보가 아직 등록되지 않았습니다. 아래 [파이어베이스 설정] 버튼을 눌러 프로젝트 설정을 등록해 주세요.');
-        setShowConfigModal(true);
-        return;
-      }
-
       if (err.code === 'auth/popup-closed-by-user') {
         setLoginError('로그인 창이 닫혔습니다. 다시 시도해 주세요.');
         return;
@@ -109,45 +97,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
       }
 
       setLoginError(`Google 로그인 중 오류가 발생했습니다: ${err.message || err.code}`);
-    }
-  };
-
-  // 파이어베이스 설정 저장
-  const handleSaveFirebaseConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      // JSON 객체 또는 firebaseConfig 객체 파싱 지원
-      let parsed: any;
-      const trimmed = configInputText.trim();
-
-      if (trimmed.startsWith('{')) {
-        parsed = JSON.parse(trimmed);
-      } else {
-        // const firebaseConfig = { ... } 형태의 코드 붙여넣기 지원
-        const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          // JS 객체 리터럴 문자열을 유효한 JSON으로 변환
-          const cleanJson = jsonMatch[0]
-            .replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":')
-            .replace(/'/g, '"')
-            .replace(/,\s*\}/g, '}');
-          parsed = JSON.parse(cleanJson);
-        } else {
-          throw new Error('유효한 Firebase 설정 객체 형태가 아닙니다.');
-        }
-      }
-
-      if (!parsed.apiKey || !parsed.projectId) {
-        throw new Error('apiKey 및 projectId가 포함되어 있어야 합니다.');
-      }
-
-      saveFirebaseConfig(parsed);
-      setSavedConfig(parsed);
-      setShowConfigModal(false);
-      setLoginError(null);
-      alert('Firebase 설정이 성공적으로 저장되었습니다! 이제 구글 로그인을 진행할 수 있습니다.');
-    } catch (err: any) {
-      alert(`설정 파싱 실패: ${err.message}\nFirebase 콘솔의 firebaseConfig 객체를 그대로 붙여넣어 주세요.`);
     }
   };
 
@@ -261,48 +210,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             </div>
           )}
 
-          {/* Firebase 연동 완료 상태 안내 */}
-          <div className="pt-2">
-            <div className="flex items-center justify-between px-3 py-2 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs text-emerald-800">
-              <div className="flex items-center gap-1.5 font-medium">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Firebase 연동 완료: <strong className="font-mono text-emerald-900">harness-english</strong></span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowConfigModal(!showConfigModal)}
-                className="text-[11px] text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1 cursor-pointer"
-              >
-                <Settings className="w-3 h-3" />
-                <span>{showConfigModal ? '닫기' : '설정 변경'}</span>
-              </button>
-            </div>
 
-            {/* 설정 변경 클릭 시에만 노출되는 토글 창 */}
-            {showConfigModal && (
-              <div className="mt-2.5 p-3.5 bg-stone-50 border border-stone-200 rounded-xl space-y-2.5 animate-in fade-in">
-                <p className="text-[11px] text-stone-600 leading-relaxed">
-                  새로운 Firebase 프로젝트 키로 교체하려면 아래에 붙여넣고 저장하세요.
-                </p>
-                <form onSubmit={handleSaveFirebaseConfig} className="space-y-2">
-                  <textarea
-                    rows={3}
-                    required
-                    value={configInputText}
-                    onChange={(e) => setConfigInputText(e.target.value)}
-                    placeholder={`const firebaseConfig = {\n  apiKey: "...",\n  projectId: "..."\n};`}
-                    className="w-full p-2 bg-white border border-stone-300 rounded-lg font-mono text-[10px] text-stone-800 focus:outline-none focus:ring-1 focus:ring-honey-500 shadow-inner"
-                  />
-                  <button
-                    type="submit"
-                    className="w-full py-1.5 bg-stone-800 hover:bg-stone-900 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
-                  >
-                    설정 업데이트
-                  </button>
-                </form>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* 하단 보안 및 도메인 정책 안내 */}
