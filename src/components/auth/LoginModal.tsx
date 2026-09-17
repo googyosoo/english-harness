@@ -1,13 +1,20 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, UserRole } from '../../types/auth';
-import { User, GraduationCap, AlertCircle, Settings, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { 
+  User, GraduationCap, AlertCircle, Settings, CheckCircle2, 
+  ShieldCheck, ArrowRight, Loader2 
+} from 'lucide-react';
+import { 
+  signInWithGooglePopup, loadSavedFirebaseConfig, 
+  saveFirebaseConfig, FirebaseConfigOptions 
+} from '../../utils/firebaseAuth';
 
 interface LoginModalProps {
   isOpen: boolean;
   onLoginSuccess: (user: UserProfile) => void;
 }
 
-// 교사 허용 계정 목록 (정확한 이메일 일치)
+// 교사 허용 계정 목록 (정확한 이메일 일치 검증)
 const ALLOWED_TEACHER_EMAILS = new Set([
   'kiparang999@gmail.com',
   'honginwoo@simin.hs.kr',
@@ -17,139 +24,132 @@ const ALLOWED_TEACHER_EMAILS = new Set([
 // 학생 허용 도메인 (반드시 @simin.hs.kr)
 const STUDENT_ALLOWED_DOMAIN = '@simin.hs.kr';
 
-// 구글 JWT credential 디코더 (Base64url 디코딩)
-const parseJwt = (token: string) => {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      window
-        .atob(base64)
-        .split('')
-        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    return JSON.parse(jsonPayload);
-  } catch (e) {
-    console.error('Failed to parse JWT', e);
-    return null;
-  }
-};
-
-const GOOGLE_CLIENT_ID_KEY = 'vibe_english_google_client_id';
-
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }) => {
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
-  const [googleClientId, setGoogleClientId] = useState<string>(() => {
-    return localStorage.getItem(GOOGLE_CLIENT_ID_KEY) || '';
-  });
-  const [showConfig, setShowConfig] = useState(false);
-  const [isGsiReady, setIsGsiReady] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  const googleButtonRef = useRef<HTMLDivElement>(null);
-
-  // Google GIS 클라이언트 초기화 및 렌더링
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const checkGsi = () => {
-      const google = (window as any).google;
-      if (google && google.accounts && google.accounts.id) {
-        setIsGsiReady(true);
-        if (googleClientId && googleClientId.trim()) {
-          try {
-            google.accounts.id.initialize({
-              client_id: googleClientId.trim(),
-              callback: handleGoogleCredentialResponse,
-              auto_select: false,
-              cancel_on_tap_outside: true,
-            });
-
-            if (googleButtonRef.current) {
-              googleButtonRef.current.innerHTML = '';
-              google.accounts.id.renderButton(googleButtonRef.current, {
-                theme: 'outline',
-                size: 'large',
-                width: 320,
-                text: 'continue_with',
-                shape: 'pill',
-              });
-            }
-          } catch (err) {
-            console.warn('GSI render error:', err);
-          }
-        }
-      } else {
-        setTimeout(checkGsi, 200);
-      }
-    };
-
-    checkGsi();
-  }, [isOpen, googleClientId, selectedRole]);
-
-  // Google SSO 인증 응답 처리 및 도메인/이메일 검증
-  const handleGoogleCredentialResponse = (response: any) => {
-    setLoginError(null);
-    if (!response || !response.credential) {
-      setLoginError('Google 계정 인증 정보를 수신하지 못했습니다.');
-      return;
-    }
-
-    const payload = parseJwt(response.credential);
-    if (!payload || !payload.email) {
-      setLoginError('Google 계정 정보를 읽을 수 없습니다.');
-      return;
-    }
-
-    const email = payload.email.toLowerCase().trim();
-
-    // 1. 교사 계정 검증
-    if (selectedRole === 'teacher') {
-      if (!ALLOWED_TEACHER_EMAILS.has(email)) {
-        setLoginError(
-          `교사 계정 권한이 없습니다. 등록된 교사 이메일(kiparang999@gmail.com, honginwoo@simin.hs.kr, english1@simin.hs.kr)로 로그인해 주세요. (현재 로그인 시도: ${email})`
-        );
-        return;
-      }
-    }
-
-    // 2. 학생 계정 검증 (도메인이 @simin.hs.kr 이어야 함)
-    if (selectedRole === 'student') {
-      if (!email.endsWith(STUDENT_ALLOWED_DOMAIN)) {
-        setLoginError(
-          `학생 로그인은 반드시 학교 공식 도메인(@simin.hs.kr) 구글 계정만 입장할 수 있습니다. (현재 로그인 시도: ${email})`
-        );
-        return;
-      }
-    }
-
-    // 통과 시 실제 UserProfile 생성
-    const actualUser: UserProfile = {
-      id: `google_${payload.sub}`,
-      name: payload.name || (selectedRole === 'teacher' ? '교사' : '학생'),
-      email: email,
-      avatar:
-        payload.picture ||
-        `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(payload.name || 'User')}`,
-      role: selectedRole,
-      schoolName: '시민고등학교',
-      grade: 'G2',
-      classNumber: '1반',
-      studentNumber: selectedRole === 'student' ? email.split('@')[0] : undefined,
-    };
-
-    onLoginSuccess(actualUser);
-  };
-
-  // Google Client ID 저장
-  const handleSaveClientId = (id: string) => {
-    setGoogleClientId(id);
-    localStorage.setItem(GOOGLE_CLIENT_ID_KEY, id.trim());
-    setLoginError(null);
-  };
+  // 파이어베이스 설정 상태
+  const [savedConfig, setSavedConfig] = useState<FirebaseConfigOptions | null>(() => loadSavedFirebaseConfig());
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configInputText, setConfigInputText] = useState('');
 
   if (!isOpen) return null;
+
+  // 파이어베이스를 통한 구글 팝업 로그인 실행
+  const handleFirebaseGoogleLogin = async () => {
+    setLoginError(null);
+    setIsSigningIn(true);
+
+    try {
+      // 1. 파이어베이스 구글 팝업 호출
+      const fbUser = await signInWithGooglePopup();
+      const email = (fbUser.email || '').toLowerCase().trim();
+
+      if (!email) {
+        throw new Error('구글 계정에서 이메일 정보를 가져올 수 없습니다.');
+      }
+
+      // 2. 권한 검증: 교사 계정 확인
+      if (selectedRole === 'teacher') {
+        if (!ALLOWED_TEACHER_EMAILS.has(email)) {
+          setLoginError(
+            `교사 권한이 부여되지 않은 구글 계정입니다. 등록된 교사 계정으로 로그인해 주세요. (시도한 계정: ${email})`
+          );
+          setIsSigningIn(false);
+          return;
+        }
+      }
+
+      // 3. 권한 검증: 학생 계정 도메인 확인
+      if (selectedRole === 'student') {
+        if (!email.endsWith(STUDENT_ALLOWED_DOMAIN)) {
+          setLoginError(
+            `학생 로그인은 학교 공식 구글 계정(@simin.hs.kr)으로만 입장 가능합니다. (시도한 계정: ${email})`
+          );
+          setIsSigningIn(false);
+          return;
+        }
+      }
+
+      // 4. 인증 통과 시 사용자 프로필 구성
+      const actualUser: UserProfile = {
+        id: `fb_${fbUser.uid}`,
+        name: fbUser.displayName || (selectedRole === 'teacher' ? '교사' : '학생'),
+        email: email,
+        avatar:
+          fbUser.photoURL ||
+          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(fbUser.displayName || 'User')}`,
+        role: selectedRole,
+        schoolName: '시민고등학교',
+        grade: 'G2',
+        classNumber: '1반',
+        studentNumber: selectedRole === 'student' ? email.split('@')[0] : undefined,
+      };
+
+      setIsSigningIn(false);
+      onLoginSuccess(actualUser);
+    } catch (err: any) {
+      setIsSigningIn(false);
+
+      if (err.message === 'FIREBASE_CONFIG_MISSING') {
+        setLoginError('파이어베이스 설정 정보가 아직 등록되지 않았습니다. 아래 [파이어베이스 설정] 버튼을 눌러 프로젝트 설정을 등록해 주세요.');
+        setShowConfigModal(true);
+        return;
+      }
+
+      if (err.code === 'auth/popup-closed-by-user') {
+        setLoginError('로그인 창이 닫혔습니다. 다시 시도해 주세요.');
+        return;
+      }
+
+      if (err.code === 'auth/unauthorized-domain') {
+        setLoginError('Firebase 콘솔의 [Authentication > Settings > 승인된 도메인]에 현재 도메인(예: localhost 등)을 추가해야 합니다.');
+        return;
+      }
+
+      setLoginError(`Google 로그인 중 오류가 발생했습니다: ${err.message || err.code}`);
+    }
+  };
+
+  // 파이어베이스 설정 저장
+  const handleSaveFirebaseConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      // JSON 객체 또는 firebaseConfig 객체 파싱 지원
+      let parsed: any;
+      const trimmed = configInputText.trim();
+
+      if (trimmed.startsWith('{')) {
+        parsed = JSON.parse(trimmed);
+      } else {
+        // const firebaseConfig = { ... } 형태의 코드 붙여넣기 지원
+        const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          // JS 객체 리터럴 문자열을 유효한 JSON으로 변환
+          const cleanJson = jsonMatch[0]
+            .replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":')
+            .replace(/'/g, '"')
+            .replace(/,\s*\}/g, '}');
+          parsed = JSON.parse(cleanJson);
+        } else {
+          throw new Error('유효한 Firebase 설정 객체 형태가 아닙니다.');
+        }
+      }
+
+      if (!parsed.apiKey || !parsed.projectId) {
+        throw new Error('apiKey 및 projectId가 포함되어 있어야 합니다.');
+      }
+
+      saveFirebaseConfig(parsed);
+      setSavedConfig(parsed);
+      setShowConfigModal(false);
+      setLoginError(null);
+      alert('Firebase 설정이 성공적으로 저장되었습니다! 이제 구글 로그인을 진행할 수 있습니다.');
+    } catch (err: any) {
+      alert(`설정 파싱 실패: ${err.message}\nFirebase 콘솔의 firebaseConfig 객체를 그대로 붙여넣어 주세요.`);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/60 backdrop-blur-md p-4 animate-in fade-in duration-200">
@@ -206,87 +206,105 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             </button>
           </div>
 
-          {/* 대상별 로그인 허용 정책 안내 배너 */}
-          <div className="mt-3 p-3 bg-white rounded-xl border border-stone-200 text-[11px] leading-relaxed">
-            {selectedRole === 'teacher' ? (
-              <div className="text-indigo-800 space-y-0.5">
-                <div className="font-bold flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>교사 로그인 허용 구글 계정</span>
-                </div>
-                <ul className="list-disc list-inside text-stone-600 font-mono text-[10px] pt-1 space-y-0.5">
-                  <li>kiparang999@gmail.com</li>
-                  <li>honginwoo@simin.hs.kr</li>
-                  <li>english1@simin.hs.kr</li>
-                </ul>
+          {/* 학생 모드일 때만 도메인 정책 표시 (교사 계정 목록 문구는 삭제됨) */}
+          {selectedRole === 'student' && (
+            <div className="mt-3 p-3 bg-white rounded-xl border border-emerald-200/80 text-[11px] leading-relaxed text-emerald-800 animate-in fade-in">
+              <div className="font-bold flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>학생 로그인 정책</span>
               </div>
-            ) : (
-              <div className="text-emerald-800 space-y-0.5">
-                <div className="font-bold flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>학생 로그인 허용 정책</span>
-                </div>
-                <p className="text-stone-600 text-[11px] pt-0.5">
-                  학교 공식 구글 계정인 <strong>@simin.hs.kr</strong> 도메인으로만 입장할 수 있습니다.
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Google SSO 공식 렌더링 컨테이너 */}
-        <div className="space-y-4">
-          <div className="flex flex-col items-center justify-center min-h-[48px] p-2 bg-white rounded-2xl border border-stone-200 shadow-xs">
-            {googleClientId ? (
-              <div ref={googleButtonRef} className="flex justify-center w-full"></div>
-            ) : (
-              <div className="text-center py-2 space-y-2">
-                <p className="text-xs text-stone-600">
-                  Google OAuth 2.0 <strong>Client ID</strong> 등록이 필요합니다.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowConfig(!showConfig)}
-                  className="px-3 py-1.5 bg-honey-400 hover:bg-honey-500 text-slateText-title text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>Google Client ID 설정 열기</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Client ID 설정 드롭다운 */}
-          {showConfig && (
-            <div className="p-3.5 bg-white border-2 border-honey-300 rounded-2xl space-y-2 text-xs animate-in fade-in">
-              <label className="block text-[11px] font-bold text-stone-700">
-                Google Cloud Console OAuth 2.0 Client ID
-              </label>
-              <input
-                type="text"
-                value={googleClientId}
-                onChange={(e) => handleSaveClientId(e.target.value)}
-                placeholder="예: xxxxx.apps.googleusercontent.com"
-                className="w-full px-3 py-1.5 border border-stone-200 rounded-xl text-xs font-mono focus:outline-none focus:border-honey-500"
-              />
-              <p className="text-[10px] text-stone-400 leading-tight">
-                * 입력된 Client ID는 브라우저에 안전하게 저장되며 구글 공식 SSO 팝업을 직접 호출합니다.
+              <p className="text-stone-600 text-[11px] pt-0.5">
+                학교 공식 구글 계정인 <strong>@simin.hs.kr</strong> 도메인으로만 입장할 수 있습니다.
               </p>
             </div>
           )}
+        </div>
 
-          {/* 인증 거부 에러 메시지 */}
+        {/* 파이어베이스 기반 Google SSO 메인 버튼 */}
+        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={handleFirebaseGoogleLogin}
+            disabled={isSigningIn}
+            className="w-full py-3.5 px-4 bg-white hover:bg-stone-50 border-2 border-stone-200 hover:border-honey-400 rounded-2xl flex items-center justify-center gap-3 font-bold text-xs text-stone-800 shadow-sm transition-all cursor-pointer active:scale-[0.98] disabled:opacity-60"
+          >
+            {isSigningIn ? (
+              <Loader2 className="w-5 h-5 text-honey-500 animate-spin" />
+            ) : (
+              <svg className="w-5 h-5" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                />
+              </svg>
+            )}
+            <span className="text-sm">구글계정으로 로그인</span>
+          </button>
+
+          {/* 에러 메시지 */}
           {loginError && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 flex items-start gap-2 animate-in shake">
               <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
               <div className="leading-relaxed">{loginError}</div>
             </div>
           )}
+
+          {/* Firebase 연동 설정 박스 (등록되지 않았거나 설정을 원할 때 눈에 확 띄게 카드 형태로 표시) */}
+          <div className="p-4 bg-amber-50/80 border-2 border-amber-300 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900">
+                <Settings className="w-4 h-4 text-amber-600" />
+                <span>⚙️ [필수] Firebase 프로젝트 키 등록</span>
+              </div>
+              {savedConfig ? (
+                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[10px] font-bold">
+                  ✓ 등록 완료됨
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded-md text-[10px] font-bold animate-pulse">
+                  ! 키 등록 필요
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-amber-800/90 leading-relaxed">
+              Firebase 콘솔의 <strong>[프로젝트 설정 ➔ 내 앱 ➔ 웹( &lt;/&gt; )]</strong>에 나오는 <code>const firebaseConfig = &#123; ... &#125;;</code> 코드를 아래 상자에 그대로 붙여넣고 [설정 저장]을 눌러주세요.
+            </p>
+
+            <form onSubmit={handleSaveFirebaseConfig} className="space-y-2">
+              <textarea
+                rows={4}
+                required
+                value={configInputText}
+                onChange={(e) => setConfigInputText(e.target.value)}
+                placeholder={`const firebaseConfig = {\n  apiKey: "AIzaSy...",\n  authDomain: "your-project.firebaseapp.com",\n  projectId: "your-project",\n  appId: "1:..."\n};`}
+                className="w-full p-2.5 bg-white border border-amber-300 rounded-xl font-mono text-[11px] text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-400 leading-tight shadow-inner"
+              />
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-amber-400 hover:bg-amber-500 text-amber-950 font-extrabold text-xs rounded-xl shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>💾 설정 저장 및 연동 완료하기</span>
+              </button>
+            </form>
+          </div>
         </div>
 
         {/* 하단 보안 및 도메인 정책 안내 */}
         <div className="mt-6 text-center text-[11px] text-stone-400">
-          🔒 Google Identity Services 공식 SSO 인증 보안 적용
+          🔒 Firebase Authentication 기반 Google 공식 SSO 보안 적용
         </div>
       </div>
     </div>
