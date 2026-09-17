@@ -32,9 +32,76 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // 선택된 문항만 보기 토글
   const [showOnlySelected, setShowOnlySelected] = useState(false);
-
   // 원문 전체 펼쳐보기(아코디언/확장) 상태 관리 (펼쳐진 문항 ID Set)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+// 검색 키워드 하이라이트 렌더러 함수
+const renderHighlightedText = (text: string, query: string) => {
+  if (!query.trim() || !text) return <>{text}</>;
+
+  const trimmed = query.trim();
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const isShortAlpha = /^[a-zA-Z]{1,4}$/.test(trimmed);
+
+  let regex: RegExp;
+  if (isShortAlpha) {
+    regex = new RegExp(`(\\b${escaped}\\b)`, 'gi');
+  } else {
+    regex = new RegExp(`(${escaped})`, 'gi');
+  }
+
+  // ai 검색 시 artificial intelligence 도 하이라이트
+  if (trimmed.toLowerCase() === 'ai') {
+    regex = new RegExp(`(\\bAI\\b|\\bartificial intelligence\\b)`, 'gi');
+  }
+
+  const parts = text.split(regex);
+  return (
+    <>
+      {parts.map((part, idx) => {
+        if (!part) return null;
+        const isMatch = regex.test(part);
+        // regex 상태 리셋
+        regex.lastIndex = 0;
+        return isMatch ? (
+          <mark
+            key={idx}
+            className="bg-amber-300 text-amber-950 font-bold px-1 py-0.5 rounded shadow-xs"
+          >
+            {part}
+          </mark>
+        ) : (
+          <React.Fragment key={idx}>{part}</React.Fragment>
+        );
+      })}
+    </>
+  );
+};
+
+// 검색어가 포함된 문맥 스니펫 추출
+const getContextSnippet = (text: string, query: string): string => {
+  if (!query.trim() || !text) {
+    return text.slice(0, 180) + (text.length > 180 ? '...' : '');
+  }
+  const q = query.trim().toLowerCase();
+  const lower = text.toLowerCase();
+  let idx = lower.indexOf(q);
+
+  // ai 검색 시 artificial intelligence 위치도 탐색
+  if (idx === -1 && q === 'ai') {
+    idx = lower.indexOf('artificial intelligence');
+  }
+
+  if (idx === -1) {
+    return text.slice(0, 180) + (text.length > 180 ? '...' : '');
+  }
+
+  const start = Math.max(0, idx - 60);
+  const end = Math.min(text.length, idx + q.length + 100);
+  const prefix = start > 0 ? '... ' : '';
+  const suffix = end < text.length ? ' ...' : '';
+  return `${prefix}${text.slice(start, end)}${suffix}`;
+};
 
   // 전체 기출 데이터 비동기 로드 (/data/exam_bank.json)
   useEffect(() => {
@@ -98,23 +165,76 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
     return items.filter(item => selectedIds.has(item.id));
   }, [items, selectedIds]);
 
-  // 키워드 및 필터링 검색
+  // 키워드 및 필터링 검색 (단어 경계 매칭 및 정확도 가중치 정렬)
   const filtered = useMemo(() => {
-    return items.filter(item => {
+    const rawFiltered = items.filter(item => {
       if (showOnlySelected && !selectedIds.has(item.id)) return false;
       if (selectedGrade !== '전체' && item.grade !== selectedGrade) return false;
       if (selectedYear !== '전체' && item.year !== selectedYear) return false;
       if (selectedCategory !== '전체' && item.category !== selectedCategory) return false;
-      
-      // 키워드 검색: 제목, 대본, 지문, 문항 유형, 어휘 목록 전체 매칭
-      if (searchWord.trim()) {
-        const q = searchWord.toLowerCase();
-        const wordsText = item.words ? item.words.map(w => `${w.word} ${w.meaning}`).join(' ') : '';
-        const fullContent = `${item.title} ${item.script || ''} ${item.passage || ''} ${item.type} ${wordsText}`.toLowerCase();
-        return fullContent.includes(q);
-      }
       return true;
     });
+
+    const q = searchWord.trim().toLowerCase();
+    if (!q) return rawFiltered;
+
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 영문 1~4글자 단어(예: ai, art, car, law, eco)는 단어 경계(\b) 매칭을 적용해 said, again, start 등 오탐 방지
+    const isShortAlpha = /^[a-z]{1,4}$/.test(q);
+    const wordBoundaryRegex = new RegExp(`\\b${escaped}\\b`, 'i');
+
+    // 특수 키워드 확장 (ai 검색 시 artificial intelligence 자동 포괄)
+    const isAiQuery = q === 'ai' || q === '인공지능';
+
+    const scored = rawFiltered.map(item => {
+      const pText = item.passage || item.script || '';
+      const pTextLower = pText.toLowerCase();
+      const titleLower = item.title.toLowerCase();
+      const typeLower = item.type.toLowerCase();
+      const wordsLower = (item.words || []).map(w => `${w.word} ${w.meaning}`).join(' ').toLowerCase();
+
+      let score = 0;
+      let matched = false;
+
+      // 1. AI 특별 검색 지원
+      if (isAiQuery) {
+        if (/\b(ai|artificial intelligence)\b/i.test(pText)) {
+          matched = true;
+          score += 100;
+        }
+      }
+
+      // 2. 지문 본문(passage/script) 검사
+      if (isShortAlpha) {
+        if (wordBoundaryRegex.test(pText)) {
+          matched = true;
+          score += 60;
+        }
+      } else {
+        if (pTextLower.includes(q)) {
+          matched = true;
+          score += 40;
+          if (wordBoundaryRegex.test(pText)) score += 30;
+        }
+      }
+
+      // 3. 제목이나 유형, 어휘 목록 매칭
+      if (titleLower.includes(q) || typeLower.includes(q)) {
+        matched = true;
+        score += 30;
+      }
+      if (wordsLower.includes(q)) {
+        matched = true;
+        score += 25;
+      }
+
+      return { item, score, matched };
+    });
+
+    return scored
+      .filter(s => s.matched)
+      .sort((a, b) => b.score - a.score)
+      .map(s => s.item);
   }, [items, selectedGrade, selectedYear, selectedCategory, searchWord, showOnlySelected, selectedIds]);
 
   // 복수 문항 일괄 스튜디오 로드 실행
@@ -365,7 +485,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                         </div>
 
                         <h4 className="font-bold text-sm text-slateText-title flex items-center gap-2">
-                          <span>{item.title}</span>
+                          <span>{renderHighlightedText(item.title, searchWord)}</span>
                           <span className="text-xs text-honey-600 font-normal flex items-center gap-0.5">
                             {isExpanded ? (
                               <span className="flex items-center text-stone-400 text-[11px]">
@@ -399,7 +519,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                     </div>
                   </div>
 
-                  {/* 지문 내용: 접혀있을 때는 2줄 요약, 펼쳐졌을 때는 원문 전체 표시 */}
+                  {/* 지문 내용: 접혀있을 때는 검색 키워드 중심 스니펫, 펼쳐졌을 때는 원문 전체 및 하이라이트 표시 */}
                   <div className="mt-2.5 pl-8">
                     {isExpanded ? (
                       <div className="p-4 rounded-xl bg-white border border-stone-200 shadow-inner space-y-3 animate-in fade-in duration-150">
@@ -414,7 +534,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                         </div>
                         
                         <div className="text-xs text-slateText-body leading-relaxed font-serif whitespace-pre-line select-text">
-                          {rawText}
+                          {renderHighlightedText(rawText, searchWord)}
                         </div>
 
                         {/* 단어장이 있을 경우 단어 목록 표시 */}
@@ -429,7 +549,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                                   key={wIdx}
                                   className="px-2 py-0.5 bg-stone-50 border border-stone-200 rounded text-[11px] text-stone-700 font-mono"
                                 >
-                                  <strong>{w.word}</strong>: {w.meaning}
+                                  <strong>{renderHighlightedText(w.word, searchWord)}</strong>: {w.meaning}
                                 </span>
                               ))}
                             </div>
@@ -438,7 +558,7 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
                       </div>
                     ) : (
                       <p className="text-xs text-slateText-body/80 line-clamp-2 leading-relaxed font-serif">
-                        {rawText}
+                        {renderHighlightedText(getContextSnippet(rawText, searchWord), searchWord)}
                       </p>
                     )}
                   </div>
