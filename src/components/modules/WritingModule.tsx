@@ -2,12 +2,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ActivityContent, HarnessLayerStatus } from '../../types/harness';
 import { 
   PenTool, Sparkles, BookOpen, CheckCircle2, AlertCircle, 
-  ArrowRight, FileText, BarChart3, HelpCircle, Check 
+  ArrowRight, FileText, BarChart3, HelpCircle, Check,
+  Bot, Wand2, Zap, RefreshCw, Lightbulb
 } from 'lucide-react';
 import { loadStudentProgress, saveStudentProgress } from '../../utils/storage';
 import { loadCurrentUser, saveSubmission } from '../../utils/authStorage';
 import { runFullSmartSensorInspection, SmartSensorReportData } from '../../utils/sensorEngine';
 import { IntelligentSensorReport } from '../common/IntelligentSensorReport';
+import { inspectWritingWithSolar, SolarWritingInspection } from '../../utils/upstageService';
 
 interface WritingModuleProps {
   activity: ActivityContent;
@@ -34,6 +36,11 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [smartReport, setSmartReport] = useState<SmartSensorReportData | null>(null);
   const [showPassageHint, setShowPassageHint] = useState(false);
+
+  // Upstage Solar AI 첨삭 상태
+  const [solarResult, setSolarResult] = useState<SolarWritingInspection | null>(null);
+  const [isSolarLoading, setIsSolarLoading] = useState(false);
+  const [solarError, setSolarError] = useState<string | null>(null);
 
   // 지문 기반 빈칸 추론 문제 자동 추출/생성
   const blankMissionData = useMemo(() => {
@@ -113,6 +120,33 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
 
     // 대시보드 저장
     saveToDashboard('summary', fullOutput, report.overallScore, report.status === 'passed', report);
+  };
+
+  // 4. Upstage Solar AI 실시간 첨삭 및 패러프레이징 요청 핸들러
+  const handleRequestSolarInspection = async () => {
+    const currentInput = activeMission === 'topic' ? topicAnswer : activeMission === 'blank' ? blankAnswer : summaryAnswer;
+    if (!currentInput.trim()) {
+      alert('첨삭을 요청할 문장을 먼저 작성해 주세요.');
+      return;
+    }
+
+    setIsSolarLoading(true);
+    setSolarError(null);
+    try {
+      const result = await inspectWritingWithSolar(currentInput.trim(), passageText, activeMission);
+      setSolarResult(result);
+    } catch (err: any) {
+      setSolarError('Upstage Solar AI 첨삭 중 오류가 발생했습니다: ' + (err.message || '잠시 후 다시 시도해 주세요.'));
+    } finally {
+      setIsSolarLoading(false);
+    }
+  };
+
+  // 패러프레이징 추천 문장을 내 답안에 즉시 덮어쓰기
+  const handleApplyParaphrase = (newSentence: string) => {
+    if (activeMission === 'topic') setTopicAnswer(newSentence);
+    else if (activeMission === 'blank') setBlankAnswer(newSentence);
+    else if (activeMission === 'summary') setSummaryAnswer(newSentence);
   };
 
   // 공통 대시보드 및 하네스 저장 함수
@@ -230,6 +264,8 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
             onClick={() => {
               setActiveMission('topic');
               setIsSubmitted(false);
+              setSolarResult(null);
+              setSolarError(null);
             }}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
               activeMission === 'topic'
@@ -245,6 +281,8 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
             onClick={() => {
               setActiveMission('blank');
               setIsSubmitted(false);
+              setSolarResult(null);
+              setSolarError(null);
             }}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
               activeMission === 'blank'
@@ -260,6 +298,8 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
             onClick={() => {
               setActiveMission('summary');
               setIsSubmitted(false);
+              setSolarResult(null);
+              setSolarError(null);
             }}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
               activeMission === 'summary'
@@ -292,19 +332,30 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
               className="w-full p-3.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm font-serif leading-relaxed text-slateText-body focus:outline-none focus:border-indigo-500 shadow-inner"
             />
 
-            <div className="flex items-center justify-between pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <span className="text-[11px] text-stone-400">
                 💡 지문 문장을 그대로 베끼지 않고 자신의 단어로 표현하면 높은 센서 점수를 받습니다.
               </span>
-              <button
-                type="button"
-                onClick={handleCheckTopic}
-                disabled={!topicAnswer.trim()}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <span>검사 및 제출하기</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRequestSolarInspection}
+                  disabled={isSolarLoading || !topicAnswer.trim()}
+                  className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-300" />
+                  <span>{isSolarLoading ? 'Solar 분석 중...' : '⚡ Solar AI 실시간 첨삭'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCheckTopic}
+                  disabled={!topicAnswer.trim()}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>검사 및 제출</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -340,11 +391,20 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
               </button>
               <button
                 type="button"
+                onClick={handleRequestSolarInspection}
+                disabled={isSolarLoading || !blankAnswer.trim()}
+                className="px-3.5 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1 cursor-pointer shrink-0"
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-300" />
+                <span>Solar 분석</span>
+              </button>
+              <button
+                type="button"
                 disabled={!blankAnswer.trim()}
                 onClick={handleCheckBlank}
-                className="w-full sm:w-auto px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-amber-950 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-amber-950 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
               >
-                <span>정답 확인 및 제출</span>
+                <span>정답 확인</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -400,19 +460,139 @@ export const WritingModule: React.FC<WritingModuleProps> = ({
               className="w-full p-3.5 bg-white border border-emerald-300 rounded-xl text-xs sm:text-sm font-serif leading-relaxed text-slateText-body focus:outline-none focus:border-emerald-500 shadow-inner"
             />
 
-            <div className="flex items-center justify-between pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <span className="text-[11px] text-emerald-700/80">
                 💡 인과 접속사(Because, Therefore, Consequently 등)를 활용하면 유창성 점수가 올라갑니다.
               </span>
-              <button
-                type="button"
-                onClick={handleCheckSummary}
-                disabled={!summaryAnswer.trim()}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <span>요약문 채점 및 제출</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRequestSolarInspection}
+                  disabled={isSolarLoading || !summaryAnswer.trim()}
+                  className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-300" />
+                  <span>{isSolarLoading ? 'Solar 분석 중...' : '⚡ Solar AI 실시간 첨삭'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCheckSummary}
+                  disabled={!summaryAnswer.trim()}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>채점 및 제출</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Upstage Solar AI 실시간 첨삭 및 패러프레이징 결과 카드 */}
+        {isSolarLoading && (
+          <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-2xl flex items-center justify-center gap-3 animate-pulse">
+            <RefreshCw className="w-4 h-4 text-purple-600 animate-spin" />
+            <span className="text-xs font-bold text-purple-900">
+              Upstage Solar Pro 모델이 작성된 문맥을 분석하고 원어민 수준의 패러프레이징 및 첨삭을 생성 중입니다...
+            </span>
+          </div>
+        )}
+
+        {solarError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2 animate-in fade-in">
+            <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+            <span>{solarError}</span>
+          </div>
+        )}
+
+        {solarResult && (
+          <div className="p-5 bg-linear-to-br from-purple-50/90 via-indigo-50/40 to-white border-2 border-purple-200 rounded-2xl shadow-sm space-y-4 animate-in fade-in">
+            <div className="flex items-center justify-between border-b border-purple-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-purple-600 text-white rounded-lg shadow-xs">
+                  <Bot className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-purple-950 flex items-center gap-1.5">
+                    Upstage Solar Pro 실시간 정밀 첨삭
+                    <span className="px-2 py-0.5 bg-purple-200 text-purple-900 text-[10px] font-mono font-bold rounded-md">
+                      Score: {solarResult.overallScore}점
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-purple-700/80">고교 수능/학평 평가 기준 원어민 패러프레이징 및 문맥 논리 검증</p>
+                </div>
+              </div>
+            </div>
+
+            {/* 1. 원어민식 자연스러운 추천 문장 (Native Polish) */}
+            <div className="p-3.5 bg-white border border-purple-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                  <Wand2 className="w-4 h-4 text-purple-600" />
+                  원어민 추천 세련된 패러프레이징 문장
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleApplyParaphrase(solarResult.revisedSentence)}
+                  className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold rounded-lg shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <Check className="w-3 h-3" />
+                  <span>내 답안에 바로 적용하기</span>
+                </button>
+              </div>
+              <p className="text-xs sm:text-sm font-serif italic text-purple-950 bg-purple-50/50 p-2.5 rounded-lg border border-purple-100 leading-relaxed">
+                "{solarResult.revisedSentence}"
+              </p>
+            </div>
+
+            {/* 2. 다양한 고급 대체 표현 목록 */}
+            {solarResult.alternativeExpressions && solarResult.alternativeExpressions.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-bold text-stone-700 flex items-center gap-1">
+                  <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                  상황별 학술 표현 (클릭하여 적용):
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {solarResult.alternativeExpressions.map((expr, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => handleApplyParaphrase(expr)}
+                      className="text-left px-3 py-1.5 bg-white hover:bg-purple-50 border border-stone-200 hover:border-purple-300 rounded-lg text-xs font-serif text-stone-800 transition-all cursor-pointer shadow-2xs"
+                    >
+                      • {expr}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 3. 문법 및 어휘 오류 분석 */}
+            {solarResult.grammarIssues && solarResult.grammarIssues.length > 0 && (
+              <div className="p-3 bg-rose-50/60 border border-rose-100 rounded-xl space-y-2">
+                <span className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-500" />
+                  세부 문법 및 어휘 교정 포인트
+                </span>
+                <div className="space-y-1.5">
+                  {solarResult.grammarIssues.map((issue, idx) => (
+                    <div key={idx} className="text-[11px] leading-relaxed text-stone-700 pl-2 border-l-2 border-rose-300">
+                      <span className="line-through text-rose-700 mr-2">{issue.original}</span>
+                      <span className="font-bold text-emerald-700">➔ {issue.corrected}</span>
+                      <p className="text-stone-600 mt-0.5">{issue.explanation}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 4. 지문 맥락 논리성 & 총평 */}
+            <div className="p-3 bg-stone-50 border border-stone-200 rounded-xl text-xs space-y-1">
+              <div className="font-bold text-stone-800 flex items-center gap-1.5">
+                <span>💡 맥락 논리 평가:</span>
+              </div>
+              <p className="text-stone-700 leading-relaxed">{solarResult.logicFeedback}</p>
+              <p className="text-purple-900 font-medium pt-1 border-t border-stone-200/60 mt-1">{solarResult.evaluationSummary}</p>
             </div>
           </div>
         )}

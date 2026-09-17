@@ -3,8 +3,10 @@ import { ExamBankItem, INITIAL_EXAM_BANK_SAMPLES } from '../data/examBank';
 import { 
   Search, Filter, BookOpen, Headphones, PenTool, Sparkles, 
   X, Check, ArrowRight, Layers, Loader2, ChevronDown, ChevronUp, 
-  Eye, FileText, CheckCircle2 
+  Eye, FileText, CheckCircle2, Upload, FileUp, Image, Zap, 
+  RotateCcw, AlertCircle
 } from 'lucide-react';
+import { parseDocumentWithUpstage, ParsedPassageResult } from '../utils/upstageService';
 
 interface ExamBankModalProps {
   isOpen: boolean;
@@ -21,6 +23,9 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
   onLoadExamItem,
   onLoadExamItems,
 }) => {
+  // 모달 메인 탭 ('search' = 기출문항 탐색기, 'scanner' = AI 시험지 지문 스캐너)
+  const [modalTab, setModalTab] = useState<'search' | 'scanner'>('search');
+
   const [items, setItems] = useState<ExamBankItem[]>(examItems);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedGrade, setSelectedGrade] = useState<'전체' | '고1' | '고2' | '고3'>('전체');
@@ -34,6 +39,16 @@ export const ExamBankModal: React.FC<ExamBankModalProps> = ({
   const [showOnlySelected, setShowOnlySelected] = useState(false);
   // 원문 전체 펼쳐보기(아코디언/확장) 상태 관리 (펼쳐진 문항 ID Set)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  // [기능 C] AI 시험지 지문 스캐너 상태
+  const [scannerFile, setScannerFile] = useState<File | null>(null);
+  const [isParsing, setIsParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parsedResult, setParsedResult] = useState<ParsedPassageResult | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editPassage, setEditPassage] = useState('');
+  const [editGrade, setEditGrade] = useState<'고1' | '고2' | '고3'>('고2');
+  const [editCategory, setEditCategory] = useState<'reading' | 'listening'>('reading');
 
 // 검색 키워드 하이라이트 렌더러 함수
 const renderHighlightedText = (text: string, query: string) => {
@@ -248,44 +263,144 @@ const getContextSnippet = (text: string, query: string): string => {
     onClose();
   };
 
+  // [기능 C] 파일 업로드 및 Upstage Document Parse 실행 핸들러
+  const handleFileUpload = async (file: File) => {
+    if (!file) return;
+    setScannerFile(file);
+    setIsParsing(true);
+    setParseError(null);
+    setParsedResult(null);
+
+    try {
+      const result = await parseDocumentWithUpstage(file);
+      setParsedResult(result);
+      setEditTitle(result.title);
+      setEditPassage(result.passageText);
+      setEditGrade(result.suggestedGrade);
+      setEditCategory(result.category);
+    } catch (err: any) {
+      setParseError('Upstage Document AI 파싱 중 오류가 발생했습니다: ' + (err.message || '파일 형식을 확인해 주세요.'));
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
+  // [기능 C] 파싱된 지문 스튜디오 탑재 핸들러
+  const handleLoadParsedToStudio = () => {
+    if (!editPassage.trim()) {
+      alert('탑재할 지문 본문이 비어 있습니다.');
+      return;
+    }
+
+    const newItem: ExamBankItem = {
+      id: `parsed-${Date.now()}`,
+      year: '2026',
+      exam: '학교시험/외부지문',
+      qNumber: 99,
+      grade: editGrade,
+      category: editCategory,
+      type: editCategory === 'listening' ? '듣기 대본' : '학술 독해',
+      title: editTitle.trim() || '시험지 추출 지문',
+      passage: editCategory === 'reading' ? editPassage.trim() : undefined,
+      script: editCategory === 'listening' ? editPassage.trim() : undefined,
+      words: [],
+      cefrLevel: parsedResult?.cefrLevel || 'B2',
+      lexile: '1100L',
+      suggestedActivities: ['지문 분석', '서술형 영작', '스마트 센서 검증'],
+    };
+
+    onLoadExamItem(newItem);
+    onClose();
+  };
+
+  // [기능 C] 스캐너 초기화
+  const handleResetScanner = () => {
+    setScannerFile(null);
+    setParsedResult(null);
+    setParseError(null);
+    setEditTitle('');
+    setEditPassage('');
+  };
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="w-full max-w-5xl bg-white rounded-3xl shadow-2xl border border-stone-200 flex flex-col max-h-[92vh] overflow-hidden">
         
-        {/* 모달 상단 헤더 */}
-        <div className="p-5 sm:p-6 bg-[#FDFBF7] border-b border-stone-200 flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <span className="w-8 h-8 rounded-xl bg-honey-400 text-slateText-title flex items-center justify-center font-bold text-sm shadow-xs">
-                📚
-              </span>
-              <h3 className="text-xl font-extrabold text-slateText-title font-sans">
-                2020~2026 기출문항 탐색기 & 지문 뷰어
-              </h3>
-              <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                {isLoading ? '문항 데이터 불러오는 중...' : `총 ${items.length.toLocaleString()}문항 보유`}
-              </span>
-              {selectedIds.size > 0 && (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-600 text-white shadow-xs">
-                  {selectedIds.size}개 문항 선택됨
+        {/* 모달 상단 헤더 & 모드 탭 바 */}
+        <div className="p-5 sm:p-6 bg-[#FDFBF7] border-b border-stone-200">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="w-8 h-8 rounded-xl bg-honey-400 text-slateText-title flex items-center justify-center font-bold text-sm shadow-xs">
+                  {modalTab === 'search' ? '📚' : '📄'}
                 </span>
-              )}
+                <h3 className="text-xl font-extrabold text-slateText-title font-sans">
+                  {modalTab === 'search' ? '2020~2026 기출문항 탐색기 & 지문 뷰어' : 'Upstage Document AI 시험지 지문 스캐너'}
+                </h3>
+                {modalTab === 'search' ? (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    {isLoading ? '문항 데이터 불러오는 중...' : `총 ${items.length.toLocaleString()}문항 보유`}
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-purple-600" />
+                    <span>Upstage Document Parse 탑재</span>
+                  </span>
+                )}
+                {modalTab === 'search' && selectedIds.size > 0 && (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-600 text-white shadow-xs">
+                    {selectedIds.size}개 문항 선택됨
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slateText-muted">
+                {modalTab === 'search'
+                  ? '키워드로 지문을 실시간 검색하고, 카드를 클릭하여 지문 전체 원문을 확인한 뒤 스튜디오로 추가할 수 있습니다.'
+                  : '학교 시험지나 모의고사 PDF/이미지를 올리면, AI가 표와 레이아웃을 분석하여 깔끔한 영어 지문으로 자동 추출·탑재합니다.'}
+              </p>
             </div>
-            <p className="text-xs text-slateText-muted">
-              키워드로 지문을 실시간 검색하고, <strong>카드를 클릭하여 지문 전체 원문을 확인</strong>한 뒤 원하는 문항을 스튜디오로 추가할 수 있습니다.
-            </p>
+            <button
+              onClick={onClose}
+              className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          {/* 모드 선택 탭 바 */}
+          <div className="flex items-center gap-2 border-b border-stone-200 pt-1">
+            <button
+              type="button"
+              onClick={() => setModalTab('search')}
+              className={`pb-2 px-3 text-xs font-extrabold transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                modalTab === 'search'
+                  ? 'border-honey-500 text-stone-900'
+                  : 'border-transparent text-stone-400 hover:text-stone-700'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span>2020~2026 기출문항 탐색기</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setModalTab('scanner')}
+              className={`pb-2 px-3 text-xs font-extrabold transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                modalTab === 'scanner'
+                  ? 'border-purple-600 text-purple-950'
+                  : 'border-transparent text-stone-400 hover:text-purple-700'
+              }`}
+            >
+              <FileUp className="w-3.5 h-3.5 text-purple-600" />
+              <span>📄 시험지/지문 AI 스캐너 (Upstage OCR)</span>
+              <span className="px-1.5 py-0.2 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-md">AI 자동 추출</span>
+            </button>
+          </div>
         </div>
 
-        {/* 필터 바 (키워드 검색창, 학년, 연도, 영역 필터) */}
+        {/* 1. 기출 탐색기 탭일 때 필터 바 */}
+        {modalTab === 'search' && (
         <div className="p-4 bg-stone-50/90 border-b border-stone-200 space-y-3">
           {/* 1열: 키워드 검색창 및 학년 필터 */}
           <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -413,8 +528,10 @@ const getContextSnippet = (text: string, query: string): string => {
             </div>
           )}
         </div>
+        )}
 
-        {/* 문항 목록 리스트 */}
+        {/* 1. 기출문항 리스트 뷰 */}
+        {modalTab === 'search' && (
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
           {isLoading ? (
             <div className="py-20 text-center space-y-3">
@@ -567,31 +684,265 @@ const getContextSnippet = (text: string, query: string): string => {
             })
           )}
         </div>
+        )}
+
+        {/* 2. AI 시험지 지문 스캐너 탭 */}
+        {modalTab === 'scanner' && (
+          <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5 bg-stone-50/40">
+            {/* 상단 안내 배너 */}
+            <div className="p-4 bg-linear-to-r from-purple-50 via-indigo-50 to-white border border-purple-200 rounded-2xl flex items-start gap-3">
+              <div className="p-2 bg-purple-600 text-white rounded-xl shadow-xs shrink-0 mt-0.5">
+                <FileUp className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-sm font-black text-purple-950 flex items-center gap-2">
+                  Upstage Document Parse 기반 지문 자동 추출 & 스튜디오 연계
+                  <span className="px-2 py-0.5 bg-purple-200 text-purple-900 text-[10px] font-mono font-bold rounded-md">OCR 2.0</span>
+                </h4>
+                <p className="text-xs text-purple-800 leading-relaxed">
+                  학교 시험지, EBS 교재, 모의고사 PDF 또는 사진 파일을 업로드하시면 복잡한 단락과 표, 문항 번호 속에서 
+                  <strong> 순수 영어 지문 본문만을 AI가 추출·정제하여 스튜디오 학습 과업으로 즉시 전환</strong>합니다.
+                </p>
+              </div>
+            </div>
+
+            {/* 파일 업로드 드롭존 (아직 결과가 없거나 새로 올릴 때) */}
+            {!parsedResult && !isParsing && (
+              <div className="p-8 border-2 border-dashed border-purple-300 hover:border-purple-500 rounded-3xl bg-white text-center space-y-4 transition-all hover:bg-purple-50/30">
+                <div className="w-14 h-14 mx-auto bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center shadow-inner">
+                  <Upload className="w-7 h-7" />
+                </div>
+                <div>
+                  <h5 className="text-sm font-extrabold text-stone-800">
+                    시험지 또는 지문 파일(PDF / 이미지)을 드래그하거나 선택하세요
+                  </h5>
+                  <p className="text-xs text-stone-500 mt-1">
+                    지원 파일: <strong>.pdf, .png, .jpg, .jpeg</strong> (최대 10MB)
+                  </p>
+                </div>
+                <div>
+                  <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer">
+                    <FileUp className="w-4 h-4" />
+                    <span>내 컴퓨터에서 시험지 파일 선택</span>
+                    <input
+                      type="file"
+                      accept=".pdf,image/png,image/jpeg,image/jpg"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileUpload(file);
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* 파싱 로딩 상태 */}
+            {isParsing && (
+              <div className="p-12 bg-white border border-purple-200 rounded-3xl text-center space-y-4 shadow-sm animate-pulse">
+                <div className="w-14 h-14 mx-auto bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center">
+                  <RotateCcw className="w-7 h-7 animate-spin" />
+                </div>
+                <div className="space-y-1">
+                  <h5 className="text-sm font-extrabold text-purple-950">
+                    Upstage Document Parse 모델이 시험지를 분석 중입니다...
+                  </h5>
+                  <p className="text-xs text-purple-700">
+                    단락 레이아웃과 텍스트를 인식하고 불필요한 번호와 노이즈를 Solar Pro가 정제하고 있습니다.
+                  </p>
+                </div>
+                {scannerFile && (
+                  <span className="inline-block px-3 py-1 bg-stone-100 rounded-full text-xs font-mono text-stone-600">
+                    📄 {scannerFile.name} ({(scannerFile.size / 1024).toFixed(1)} KB)
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* 파싱 에러 알림 */}
+            {parseError && (
+              <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-800">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                  <span>{parseError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetScanner}
+                  className="px-3 py-1 bg-rose-600 text-white rounded-lg font-bold text-xs hover:bg-rose-700 cursor-pointer"
+                >
+                  다시 시도
+                </button>
+              </div>
+            )}
+
+            {/* 파싱 완료 및 편집 폼 */}
+            {parsedResult && !isParsing && (
+              <div className="bg-white border border-purple-200 rounded-3xl p-6 space-y-5 shadow-sm animate-in fade-in">
+                <div className="flex items-center justify-between pb-3 border-b border-stone-200 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    <span className="text-xs font-bold text-stone-800">
+                      시험지 지문 추출 완료 (총 {parsedResult.extractedElementsCount}개 요소 파싱)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetScanner}
+                    className="text-xs text-stone-500 hover:text-stone-800 underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>다른 파일 스캔하기</span>
+                  </button>
+                </div>
+
+                {/* 메타데이터 편집 행 */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="text-xs font-bold text-stone-700">지문 제목 / 주제</label>
+                    <input
+                      type="text"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      placeholder="지문 제목 입력"
+                      className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs font-bold text-stone-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-stone-700">대상 학년</label>
+                    <div className="flex items-center gap-1">
+                      {(['고1', '고2', '고3'] as const).map(g => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setEditGrade(g)}
+                          className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            editGrade === g
+                              ? 'bg-purple-600 text-white shadow-xs'
+                              : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                          }`}
+                        >
+                          {g}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 카테고리 및 스펙 배지 */}
+                <div className="flex items-center justify-between text-xs pt-1 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-stone-600">영역 분류:</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditCategory('reading')}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
+                        editCategory === 'reading' ? 'bg-indigo-600 text-white' : 'bg-stone-100 text-stone-600'
+                      }`}
+                    >
+                      📖 독해 지문
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditCategory('listening')}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
+                        editCategory === 'listening' ? 'bg-amber-600 text-white' : 'bg-stone-100 text-stone-600'
+                      }`}
+                    >
+                      🎧 듣기 대본
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 font-mono text-stone-500 text-[11px]">
+                    <span className="px-2 py-0.5 bg-stone-100 rounded">CEFR {parsedResult.cefrLevel}</span>
+                    <span className="px-2 py-0.5 bg-stone-100 rounded">
+                      총 {editPassage.split(/\s+/).filter(Boolean).length}단어
+                    </span>
+                  </div>
+                </div>
+
+                {/* 본문 텍스트 에디터 */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-stone-700 flex items-center justify-between">
+                    <span>추출된 영어 지문 본문 (필요 시 직접 수정 가능)</span>
+                    <span className="text-[11px] text-purple-600 font-normal">
+                      💡 원문 번호나 보기 등이 있다면 지우거나 다듬으실 수 있습니다.
+                    </span>
+                  </label>
+                  <textarea
+                    rows={12}
+                    value={editPassage}
+                    onChange={(e) => setEditPassage(e.target.value)}
+                    className="w-full p-4 bg-stone-50 border border-stone-300 rounded-2xl text-xs sm:text-sm font-serif leading-relaxed text-stone-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 shadow-inner select-text"
+                  />
+                </div>
+
+                {/* 탑재 실행 버튼 바 */}
+                <div className="pt-2 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={handleResetScanner}
+                    className="px-4 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-xs rounded-xl transition-colors cursor-pointer"
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadParsedToStudio}
+                    className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4 text-amber-300" />
+                    <span>🚀 이 지문 스튜디오에 즉시 탑재하기</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 하단 푸터 바 */}
         <div className="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-between text-xs text-slateText-muted">
-          <div className="flex items-center gap-2">
-            <span>검색 결과: <strong>{filtered.length}</strong>개 문항</span>
-            {selectedIds.size > 0 && (
-              <span className="text-indigo-600 font-bold">({selectedIds.size}개 선택 중)</span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {selectedIds.size > 0 && (
+          {modalTab === 'search' ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span>검색 결과: <strong>{filtered.length}</strong>개 문항</span>
+                {selectedIds.size > 0 && (
+                  <span className="text-indigo-600 font-bold">({selectedIds.size}개 선택 중)</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedIds.size > 0 && (
+                  <button
+                    onClick={handleLoadSelectedBatch}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xs transition-colors cursor-pointer"
+                  >
+                    선택한 {selectedIds.size}개 스튜디오로 넣기
+                  </button>
+                )}
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl font-medium text-stone-700 cursor-pointer"
+                >
+                  닫기
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 text-purple-800">
+                <Zap className="w-4 h-4 text-purple-600" />
+                <span>Upstage Document Parse API를 통해 고품질 텍스트 및 메타데이터를 정제합니다.</span>
+              </div>
               <button
-                onClick={handleLoadSelectedBatch}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xs transition-colors cursor-pointer"
+                onClick={onClose}
+                className="px-4 py-2 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl font-medium text-stone-700 cursor-pointer"
               >
-                선택한 {selectedIds.size}개 스튜디오로 넣기
+                닫기
               </button>
-            )}
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl font-medium text-stone-700 cursor-pointer"
-            >
-              닫기
-            </button>
-          </div>
+            </>
+          )}
         </div>
       </div>
     </div>
