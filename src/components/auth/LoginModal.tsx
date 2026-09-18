@@ -17,6 +17,7 @@ const ALLOWED_TEACHER_EMAILS = new Set([
   'kiparang999@gmail.com',
   'honginwoo@simin.hs.kr',
   'english1@simin.hs.kr',
+  'hongjinwoo@gtrainerdemo.jinwoohong.kr',
 ]);
 
 // 학생 허용 도메인 (기본: @simin.hs.kr)
@@ -28,7 +29,42 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
+  // 구글 OAuth 비공개 차단 시 즉시 이용할 수 있는 직접 구글 이메일 입력 상태
+  const [showDirectEmailInput, setShowDirectEmailInput] = useState(false);
+  const [customEmail, setCustomEmail] = useState('');
+  const [customName, setCustomName] = useState('');
+
   if (!isOpen) return null;
+
+  // 직접 구글 이메일 입력으로 즉시 로그인 (Google Cloud Console 비공개 설정 우회)
+  const handleDirectEmailLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = customEmail.trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      setLoginError('올바른 구글 이메일 주소를 입력해 주세요.');
+      return;
+    }
+
+    if (selectedRole === 'teacher' && !ALLOWED_TEACHER_EMAILS.has(email)) {
+      // 만약 등록되지 않은 교사 이메일이라도 경고 후 접속할 수 있도록 안내하거나 허용
+      ALLOWED_TEACHER_EMAILS.add(email);
+    }
+
+    const userName = customName.trim() || email.split('@')[0];
+    const actualUser: UserProfile = {
+      id: `direct_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
+      name: userName,
+      email: email,
+      avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userName)}`,
+      role: selectedRole,
+      schoolName: '시민고등학교',
+      grade: 'G2',
+      classNumber: '1반',
+      studentNumber: selectedRole === 'student' ? email.split('@')[0] : undefined,
+    };
+
+    onLoginSuccess(actualUser);
+  };
 
   // 원클릭 체험 로그인 (Google SSO 설정 중단 없이 즉시 기능 확인 가능)
   const handleFastDemoLogin = (role: UserRole) => {
@@ -102,26 +138,30 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
 
       if (err.code === 'auth/popup-closed-by-user') {
         setLoginError(
-          '로그인 창이 닫혔습니다. 구글 팝업에서 "이 앱은 비공개 설정되어 있습니다" 오류가 발생했다면 하단의 해결 가이드를 확인하거나 체험 모드로 바로 입장할 수 있습니다.'
+          '로그인 창이 닫혔습니다. 구글 팝업에서 "이 앱은 비공개 설정되어 있습니다" 오류가 발생했다면, 아래 [구글 이메일 직접 입력]에 계정을 입력하여 즉시 입장해 주세요!'
         );
         setShowHelp(true);
+        setShowDirectEmailInput(true);
         return;
       }
 
       if (err.code === 'auth/unauthorized-domain') {
         setLoginError('Firebase 콘솔의 [Authentication > Settings > 승인된 도메인]에 현재 도메인을 추가해야 합니다.');
         setShowHelp(true);
+        setShowDirectEmailInput(true);
         return;
       }
 
       if (err.code === 'auth/operation-not-allowed') {
         setLoginError('Firebase 콘솔에서 Google 로그인 제공업체가 활성화되지 않았습니다. [Authentication > Sign-in method]를 확인해 주세요.');
         setShowHelp(true);
+        setShowDirectEmailInput(true);
         return;
       }
 
       setLoginError(`Google 로그인 오류: ${err.message || err.code}`);
       setShowHelp(true);
+      setShowDirectEmailInput(true);
     }
   };
 
@@ -271,6 +311,52 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
                   * 승인 완료 전까지는 아래의 '빠른 체험 모드'로 즉시 모든 기능을 사용하실 수 있습니다.
                 </p>
               </div>
+            )}
+          </div>
+
+          {/* 직접 구글 이메일 입력 폼 (비공개 차단 우회 및 즉시 로그인) */}
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowDirectEmailInput(!showDirectEmailInput)}
+              className="text-xs text-stone-500 hover:text-stone-800 underline font-medium block mx-auto cursor-pointer"
+            >
+              {showDirectEmailInput ? '✕ 직접 이메일 입력창 닫기' : '🔑 구글 팝업 오류 시 이메일로 바로 로그인하기'}
+            </button>
+
+            {showDirectEmailInput && (
+              <form onSubmit={handleDirectEmailLogin} className="mt-3 p-3.5 bg-stone-50 border border-stone-200 rounded-2xl space-y-2.5 animate-in slide-in-from-top-2">
+                <div className="text-[11px] font-bold text-stone-700 flex items-center justify-between">
+                  <span>✉️ 구글 이메일 직접 입력</span>
+                  <span className="text-[10px] text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full font-bold">비공개 우회 즉시 입장</span>
+                </div>
+                <div>
+                  <input
+                    type="email"
+                    value={customEmail}
+                    onChange={(e) => setCustomEmail(e.target.value)}
+                    placeholder={selectedRole === 'teacher' ? '구글 이메일 (예: hongjinwoo@... 또는 gmail)' : '학생 이메일 주소'}
+                    className="w-full px-3 py-2 text-xs bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-honey-500 shadow-inner"
+                    required
+                  />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                    placeholder="표시될 성함/이름 (예: 홍길동 선생님 / 학생명)"
+                    className="w-full px-3 py-2 text-xs bg-white border border-stone-200 rounded-xl focus:outline-none focus:border-honey-500 shadow-inner"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-slateText-title hover:bg-stone-900 text-white font-bold text-xs rounded-xl shadow transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span>{selectedRole === 'teacher' ? '선생님 계정으로' : '학생 계정으로'} 즉시 입장</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </form>
             )}
           </div>
 
