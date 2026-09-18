@@ -70,6 +70,8 @@ export const signInWithGooglePopup = async (customConfig?: FirebaseConfigOptions
   }
 
   const provider = new GoogleAuthProvider();
+  provider.addScope('email');
+  provider.addScope('profile');
   provider.setCustomParameters({
     prompt: 'select_account',
   });

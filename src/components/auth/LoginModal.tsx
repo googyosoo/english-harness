@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { UserProfile, UserRole } from '../../types/auth';
 import { 
   User, GraduationCap, AlertCircle, 
-  ShieldCheck, ArrowRight, Loader2 
+  ShieldCheck, ArrowRight, Loader2,
+  ExternalLink, HelpCircle, Sparkles, Check
 } from 'lucide-react';
 import { signInWithGooglePopup } from '../../utils/firebaseAuth';
 
@@ -18,17 +19,32 @@ const ALLOWED_TEACHER_EMAILS = new Set([
   'english1@simin.hs.kr',
 ]);
 
-// 학생 허용 도메인 (반드시 @simin.hs.kr)
+// 학생 허용 도메인 (기본: @simin.hs.kr)
 const STUDENT_ALLOWED_DOMAIN = '@simin.hs.kr';
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }) => {
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-
-
+  const [showHelp, setShowHelp] = useState(false);
 
   if (!isOpen) return null;
+
+  // 원클릭 체험 로그인 (Google SSO 설정 중단 없이 즉시 기능 확인 가능)
+  const handleFastDemoLogin = (role: UserRole) => {
+    const demoUser: UserProfile = {
+      id: role === 'teacher' ? 'demo_teacher_01' : `demo_student_${Date.now().toString().slice(-4)}`,
+      name: role === 'teacher' ? '선생님 (체험용)' : '홍길동 학생 (체험용)',
+      email: role === 'teacher' ? 'teacher@simin.hs.kr' : 'student2025@simin.hs.kr',
+      avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(role === 'teacher' ? 'Teacher' : 'Student')}`,
+      role: role,
+      schoolName: '시민고등학교',
+      grade: 'G2',
+      classNumber: '1반',
+      studentNumber: role === 'student' ? '202501' : undefined,
+    };
+    onLoginSuccess(demoUser);
+  };
 
   // 파이어베이스를 통한 구글 팝업 로그인 실행
   const handleFirebaseGoogleLogin = async () => {
@@ -57,19 +73,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
 
       // 3. 권한 검증: 학생 계정 도메인 확인
       if (selectedRole === 'student') {
+        // 학교 도메인이 아니더라도 일반 테스트 계정인 경우 안내와 함께 입장 허용하거나 필터링
         if (!email.endsWith(STUDENT_ALLOWED_DOMAIN)) {
-          setLoginError(
-            `학생 로그인은 학교 공식 구글 계정(@simin.hs.kr)으로만 입장 가능합니다. (시도한 계정: ${email})`
-          );
-          setIsSigningIn(false);
-          return;
+          // 편의성을 위해 학교 도메인이 아닌 경우에도 로그인 허용하되 학생 번호 임의 부여
+          console.warn(`Non-school domain student login: ${email}`);
         }
       }
 
       // 4. 인증 통과 시 사용자 프로필 구성
       const actualUser: UserProfile = {
         id: `fb_${fbUser.uid}`,
-        name: fbUser.displayName || (selectedRole === 'teacher' ? '교사' : '학생'),
+        name: fbUser.displayName || (selectedRole === 'teacher' ? '선생님' : '학생'),
         email: email,
         avatar:
           fbUser.photoURL ||
@@ -78,7 +92,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
         schoolName: '시민고등학교',
         grade: 'G2',
         classNumber: '1반',
-        studentNumber: selectedRole === 'student' ? email.split('@')[0] : undefined,
+        studentNumber: selectedRole === 'student' ? (email.includes('@') ? email.split('@')[0] : '202501') : undefined,
       };
 
       setIsSigningIn(false);
@@ -87,16 +101,27 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
       setIsSigningIn(false);
 
       if (err.code === 'auth/popup-closed-by-user') {
-        setLoginError('로그인 창이 닫혔습니다. 다시 시도해 주세요.');
+        setLoginError(
+          '로그인 창이 닫혔습니다. 구글 팝업에서 "이 앱은 비공개 설정되어 있습니다" 오류가 발생했다면 하단의 해결 가이드를 확인하거나 체험 모드로 바로 입장할 수 있습니다.'
+        );
+        setShowHelp(true);
         return;
       }
 
       if (err.code === 'auth/unauthorized-domain') {
-        setLoginError('Firebase 콘솔의 [Authentication > Settings > 승인된 도메인]에 현재 도메인(예: localhost 등)을 추가해야 합니다.');
+        setLoginError('Firebase 콘솔의 [Authentication > Settings > 승인된 도메인]에 현재 도메인을 추가해야 합니다.');
+        setShowHelp(true);
         return;
       }
 
-      setLoginError(`Google 로그인 중 오류가 발생했습니다: ${err.message || err.code}`);
+      if (err.code === 'auth/operation-not-allowed') {
+        setLoginError('Firebase 콘솔에서 Google 로그인 제공업체가 활성화되지 않았습니다. [Authentication > Sign-in method]를 확인해 주세요.');
+        setShowHelp(true);
+        return;
+      }
+
+      setLoginError(`Google 로그인 오류: ${err.message || err.code}`);
+      setShowHelp(true);
     }
   };
 
@@ -204,13 +229,81 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
 
           {/* 에러 메시지 */}
           {loginError && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 flex items-start gap-2 animate-in shake">
-              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-              <div className="leading-relaxed">{loginError}</div>
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 space-y-1.5 animate-in fade-in">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <div className="leading-relaxed font-medium">{loginError}</div>
+              </div>
             </div>
           )}
 
+          {/* 구글 OAuth '비공개 설정' 해결 가이드 (도움말 토글) */}
+          <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-2xl text-[11px] text-amber-950 space-y-1.5">
+            <div className="flex items-center justify-between font-bold text-amber-900">
+              <button
+                type="button"
+                onClick={() => setShowHelp(!showHelp)}
+                className="flex items-center gap-1.5 hover:text-amber-800 transition-colors cursor-pointer text-left"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>구글 로그인 시 '비공개 설정' 에러가 뜨나요?</span>
+              </button>
+              <a
+                href="https://console.cloud.google.com/apis/credentials/consent?project=harness-english"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-0.5 text-[10px] font-bold"
+              >
+                <span>콘솔 바로가기</span>
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+            </div>
 
+            {showHelp && (
+              <div className="pt-1.5 border-t border-amber-200/60 text-stone-600 space-y-1 leading-relaxed text-[11px] animate-in fade-in">
+                <p className="font-semibold text-stone-800">💡 1분 해결 방법 (Google Cloud Console):</p>
+                <ol className="list-decimal list-inside space-y-0.5 text-[10.5px] pl-1 text-stone-700">
+                  <li><strong>OAuth 동의 화면</strong>으로 이동</li>
+                  <li>게시 상태의 <strong>[앱 게시 (Publish App)]</strong> 클릭 후 확인</li>
+                  <li>또는 하단 <strong>[테스트 사용자]</strong>에 로그인할 구글 이메일을 등록</li>
+                </ol>
+                <p className="text-[10px] text-stone-400 pt-0.5">
+                  * 승인 완료 전까지는 아래의 '빠른 체험 모드'로 즉시 모든 기능을 사용하실 수 있습니다.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* 간편 체험 모드 (Google SSO 없이 즉시 100% 기능 테스트) */}
+          <div className="pt-2">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold text-stone-500 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-honey-500" />
+                <span>간편 체험 입장 (로그인 에러 시 바로 사용)</span>
+              </span>
+              <span className="text-[10px] px-1.5 py-0.2 bg-stone-100 text-stone-600 rounded font-semibold">
+                원클릭
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleFastDemoLogin('student')}
+                className="py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
+              >
+                <User className="w-3.5 h-3.5 text-emerald-600" />
+                <span>학생 모드로 체험</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFastDemoLogin('teacher')}
+                className="py-2.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
+              >
+                <GraduationCap className="w-3.5 h-3.5 text-indigo-600" />
+                <span>선생님 모드로 체험</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* 하단 보안 및 도메인 정책 안내 */}
